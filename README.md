@@ -4,9 +4,13 @@ A Chrome extension that sorts your open tabs into Chrome tab groups using an AI 
 
 Nothing is grouped without your approval: every run produces a list of proposed moves that you review, edit, and apply.
 
+| Review | Presets | Settings |
+| --- | --- | --- |
+| ![Proposed groups waiting for approval](assets/screenshots/review.png) | ![A preset with a name, description, text cues, and a color](assets/screenshots/presets.png) | ![Provider, key, and model settings](assets/screenshots/settings.png) |
+
 ## What it does
 
-- **Review before anything moves.** Sync the current window or every window, then approve or reject each proposed group, deselect individual tabs, or lock a tab so it is never touched.
+- **Review before anything moves.** Sync the window you are in, then approve or reject each proposed group, deselect individual tabs, or lock a tab so it is never touched.
 - **Organizes new tabs once.** The first real page a new tab lands on can be grouped automatically. Later navigation in that tab is left alone.
 - **Presets** teach it names it could not guess — internal project codes, product names — with optional text cues that match locally, before any request is made.
 - **Undo.** The ten most recent operations can be reversed for tabs that are still where the extension put them. Your later manual changes are preserved.
@@ -45,7 +49,7 @@ To use a gateway instead of a provider's own endpoint, set **API base URL**. It 
 
 ## Using it
 
-1. Open **Review** and choose **Sync current window** or **Sync all windows**.
+1. Open **Review** and press **Sync current window**. A Chrome tab group belongs to one window, so each window is organized on its own.
 2. Each proposed group appears as a row you can expand. Reject a whole group, uncheck single tabs, or lock a tab to keep it out of this and every later run.
 3. Press **Apply selected**. Right before moving anything, the extension rechecks each tab's window, URL, title, and current group, and skips whatever changed while you were reading.
 4. **History** lists recent operations with an undo button.
@@ -65,6 +69,7 @@ npm test          # unit and integration tests
 npm run lint      # typecheck plus repository rules
 npm run test:e2e  # loads dist/ in a fresh Chromium, mocked providers, no real key
 npm run package   # builds and writes tab-organizer.zip
+npm run screenshots  # rebuilds the README images from the built extension, all data mocked
 ```
 
 Load the absolute `dist/` directory with **Load unpacked** to run a development build. `npm run test:e2e` covers BYOK states, three locales, preset persistence, real Chrome group mutation and undo, and a 101-tab run across windows.

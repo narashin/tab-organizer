@@ -10,7 +10,8 @@
     "test:e2e": "npm run build && playwright test",
     "typecheck": "tsc --noEmit",
     "lint": "npm run typecheck && node scripts/lint.mjs",
-    "package": "npm run build && cd dist && zip -q -FS -r ../tab-organizer.zip ."
+    "package": "npm run build && cd dist && zip -q -FS -r ../tab-organizer.zip .",
+    "screenshots": "node scripts/capture-screenshots.mjs"
   },
   "dependencies": {
     "react": "19.2.7",
