@@ -249,6 +249,7 @@ export class SynchronizationService {
 
       const changes: SynchronizationChange[] = [];
       const canonicalTitles = new Map<string, string>();
+      const assignedColors = new Map<string, GroupColor>();
       const approvedTitles = approvedGroupTitles === undefined
         ? undefined
         : new Set(approvedGroupTitles.map((title) => title.trim().toLowerCase()));
@@ -260,7 +261,9 @@ export class SynchronizationService {
           unchangedCount += 1;
           continue;
         }
-        const target = resolveTarget(decision, groups, presets, canonicalTitles, approvedTitles);
+        const target = resolveTarget(
+          decision, groups, presets, canonicalTitles, assignedColors, approvedTitles,
+        );
         if (target === null) throw new Error('synchronization_invalid_target');
         if (target === 'unchanged') {
           unchangedCount += 1;
@@ -670,6 +673,56 @@ export function normalizeGroupTitle(title: string): string {
   return title.trim().toLowerCase();
 }
 
+// Grey is what an unstyled Chrome group looks like, so a group this extension named should not be
+// indistinguishable from one the user made by hand.
+const NEW_GROUP_COLORS: GroupColor[] = [
+  'blue', 'green', 'purple', 'orange', 'pink', 'cyan', 'red', 'yellow',
+];
+
+/** The color a title maps to, before collisions within the window are taken into account. */
+export function preferredGroupColor(title: string): GroupColor {
+  let hash = 0;
+  for (const character of normalizeGroupTitle(title)) {
+    hash = (hash * 31 + character.charCodeAt(0)) % 1_000_003;
+  }
+  return NEW_GROUP_COLORS[hash % NEW_GROUP_COLORS.length] ?? 'blue';
+}
+
+/**
+ * Picks a color for a group this run is about to create.
+ *
+ * The starting point comes from the title, so a project keeps its color between runs rather than
+ * changing every time the tabs are reviewed. From there it steps forward until it finds a color no
+ * other group in the same window is already using, because two same-colored groups side by side are
+ * harder to tell apart than a group whose color moved.
+ */
+function assignGroupColor(
+  title: string,
+  groups: BrowserGroup[],
+  assigned: Map<string, GroupColor>,
+): GroupColor {
+  const normalized = normalizeGroupTitle(title);
+  const already = assigned.get(normalized);
+  if (already !== undefined) return already;
+
+  const taken = new Set<GroupColor>([
+    ...groups.map((group) => group.color),
+    ...assigned.values(),
+  ]);
+  const start = NEW_GROUP_COLORS.indexOf(preferredGroupColor(normalized));
+  for (let step = 0; step < NEW_GROUP_COLORS.length; step += 1) {
+    const candidate = NEW_GROUP_COLORS[(start + step) % NEW_GROUP_COLORS.length] ?? 'blue';
+    if (!taken.has(candidate)) {
+      assigned.set(normalized, candidate);
+      return candidate;
+    }
+  }
+  // Every color is in use, so the title decides and a repeat is accepted.
+  const fallback = preferredGroupColor(normalized);
+  assigned.set(normalized, fallback);
+  return fallback;
+}
+
 /**
  * Finds a live group by title alone.
  *
@@ -687,6 +740,7 @@ function resolveTarget(
   groups: BrowserGroup[],
   presets: Awaited<ReturnType<PresetStore['list']>>,
   canonicalTitles: Map<string, string>,
+  assignedColors: Map<string, GroupColor>,
   approvedTitles: Set<string> | undefined,
 ): SynchronizationTarget | 'unchanged' | null {
   if (decision.kind === 'existing_group') {
@@ -740,7 +794,8 @@ function resolveTarget(
     if (canonical === undefined) canonicalTitles.set(normalized, title);
     return {
       kind: 'new_group', ref: null, groupId: null, title: canonical ?? title,
-      color: 'grey', description: decision.suggestedDescription,
+      color: assignGroupColor(canonical ?? title, groups, assignedColors),
+      description: decision.suggestedDescription,
     };
   }
   return null;

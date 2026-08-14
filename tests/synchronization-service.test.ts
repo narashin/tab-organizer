@@ -9,6 +9,7 @@ import type {
 import { PresetStore } from '../src/background/preset-store';
 import type { LocalStorageArea, StoredValues } from '../src/background/settings-service';
 import {
+  preferredGroupColor,
   SYNCHRONIZATION_CHUNK_SIZE,
   SYNCHRONIZATION_MAX_CONCURRENT_CHUNKS,
   SynchronizationService,
@@ -147,6 +148,57 @@ describe('SynchronizationService', () => {
     const afterApply = createHarness();
     Object.assign(afterApply.session.values, session.values);
     expect(await afterApply.service.latestProposal()).toBeNull();
+  });
+
+  it('gives each new group its own color and keeps it across runs', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const windowTabs: BrowserTab[] = [
+      { tabId: 31, windowId: 10, title: 'Docs one', url: 'https://docs.test/1', groupId: -1, incognito: false },
+      { tabId: 32, windowId: 10, title: 'Api one', url: 'https://api.test/1', groupId: -1, incognito: false },
+      { tabId: 33, windowId: 10, title: 'News one', url: 'https://news.test/1', groupId: -1, incognito: false },
+    ];
+    const names: Record<number, string> = { 31: 'Docs', 32: 'API', 33: 'Reading' };
+    const classifier: Classifier = {
+      classify: async (request) => request.tabs.map((tab) => ({
+        tabRef: tab.ref,
+        kind: 'new_group' as const,
+        targetRef: null,
+        suggestedName: names[parseInt(tab.ref.replace('tab-', ''), 10)] ?? 'Other',
+        suggestedDescription: 'Related',
+        confidence: 0.9,
+        reason: 'Same topic',
+      })),
+    };
+    const platform: SynchronizationPlatform = {
+      listTabs: async () => windowTabs,
+      // One group already occupies the color 'Docs' would prefer.
+      listGroups: async () => [{
+        groupId: 700, windowId: 10, ref: 'group-700', title: 'Existing',
+        color: preferredGroupColor('Docs'),
+      }],
+      getTab: async (tabId) => windowTabs.find((tab) => tab.tabId === tabId) ?? null,
+      moveToExistingGroup: async () => undefined,
+      moveToNewGroup: async () => 1,
+    };
+    const build = () => new SynchronizationService(
+      classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
+      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'colors',
+    );
+
+    const proposal = await build().review('current');
+    const colors = proposal.changes.map((change) => change.target.color);
+
+    // Distinct from each other, and none of them grey, which is what an untouched group looks like.
+    expect(new Set(colors).size).toBe(colors.length);
+    expect(colors).not.toContain('grey');
+    // The color already on screen is left to the group that has it.
+    expect(colors).not.toContain(preferredGroupColor('Docs'));
+
+    // The same titles reviewed again produce the same colors, so a group does not change color
+    // every time the user runs a review.
+    const second = await build().review('current');
+    expect(second.changes.map((change) => change.target.color)).toEqual(colors);
   });
 
   it('joins a group that already carries the name instead of creating a second one', async () => {
@@ -1163,8 +1215,8 @@ describe('SynchronizationService', () => {
     expect(await history.list()).toMatchObject([{
       status: 'partial',
       tabs: [
-        { tabId: 4, expectedGroup: { title: 'Suggested', color: 'grey' } },
-        { tabId: 5, expectedGroup: { title: 'Suggested', color: 'grey' } },
+        { tabId: 4, expectedGroup: { title: 'Suggested', color: preferredGroupColor('Suggested') } },
+        { tabId: 5, expectedGroup: { title: 'Suggested', color: preferredGroupColor('Suggested') } },
       ],
     }]);
   });
@@ -1220,7 +1272,7 @@ describe('SynchronizationService', () => {
 
     expect(await history.list()).toMatchObject([{
       status: 'completed',
-      tabs: [{ expectedGroup: { groupId: 77, title: 'Suggested', color: 'grey' } }],
+      tabs: [{ expectedGroup: { groupId: 77, title: 'Suggested', color: preferredGroupColor('Suggested') } }],
     }]);
   });
 
@@ -1239,7 +1291,7 @@ describe('SynchronizationService', () => {
     expect(platform.actions).toEqual(['new:4:10:Suggested']);
     expect(await history.list()).toMatchObject([{
       status: 'completed',
-      tabs: [{ expectedGroup: { title: 'Suggested', color: 'grey' } }],
+      tabs: [{ expectedGroup: { title: 'Suggested', color: preferredGroupColor('Suggested') } }],
     }]);
   });
 
