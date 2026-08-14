@@ -1,0 +1,15 @@
+node_modules/
+dist/
+playwright-report/
+test-results/
+.playwright-mcp/
+# Plans, reviews, and handoffs stay on the machine that wrote them.
+docs/
+coverage/
+tab-organizer.zip
+*.crx
+*.pem
+.DS_Store
+.omx/
+.serena/
+.superpowers/

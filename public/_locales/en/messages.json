@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "Tab Organizer"
+  },
+  "extensionDescription": {
+    "message": "Review and organize Chrome tabs with your own OpenAI, Anthropic, or Google API key."
+  },
+  "actionTitle": {
+    "message": "Open Tab Organizer"
+  }
+}

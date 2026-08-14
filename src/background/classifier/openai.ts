@@ -1,0 +1,175 @@
+import {
+  buildClassificationInstructions,
+  buildTaxonomyInstructions,
+  classificationTimeoutMs,
+  decisionSchema,
+  isRecord,
+  resolveTaxonomy,
+  taxonomySchema,
+  TAXONOMY_TIMEOUT_MS,
+  validateDecisions,
+  withTimeout,
+  type ClassificationDecision,
+  type ClassificationRequest,
+  type Classifier,
+  type ProviderEndpoint,
+  type TaxonomyEntry,
+  type TaxonomyPlanner,
+  type TaxonomyRequest,
+} from './contract';
+
+export class OpenAiClassifier implements Classifier {
+  constructor(
+    private readonly endpoint: ProviderEndpoint,
+    private readonly fetcher: typeof fetch = fetch,
+    private readonly configuredTimeoutMs?: number,
+  ) {}
+
+  async classify(_request: ClassificationRequest): Promise<ClassificationDecision[]> {
+    const request = _request;
+    const fetcher = this.fetcher;
+    const requestTimeoutMs = this.configuredTimeoutMs ?? classificationTimeoutMs(request.tabs.length);
+    const requestController = new AbortController();
+    const response = await withTimeout((signal) => fetcher(
+      `${this.endpoint.baseUrl}/responses`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.endpoint.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: this.endpoint.model,
+          store: false,
+          instructions: buildClassificationInstructions(request.approvedGroupTitles),
+          input: JSON.stringify(request),
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'tab_classification',
+              strict: true,
+              schema: decisionSchema,
+            },
+          },
+        }),
+        signal,
+      },
+    ), requestTimeoutMs, requestController);
+
+    if (!response.ok) {
+      throw new Error('classification_request_failed');
+    }
+
+    let payload: unknown;
+    try {
+      payload = await withTimeout(
+        () => response.json(),
+        requestTimeoutMs,
+        requestController,
+      );
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message === 'classification_request_timeout') {
+        throw error;
+      }
+      throw new Error('classification_invalid_response');
+    }
+    const outputText = extractOutputText(payload);
+    if (outputText === null) {
+      throw new Error('classification_invalid_response');
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(outputText);
+    } catch {
+      throw new Error('classification_invalid_response');
+    }
+    return validateDecisions(parsed, request);
+  }
+}
+
+export class OpenAiTaxonomyPlanner implements TaxonomyPlanner {
+  constructor(
+    private readonly endpoint: ProviderEndpoint,
+    private readonly fetcher: typeof fetch = fetch,
+    private readonly requestTimeoutMs = TAXONOMY_TIMEOUT_MS,
+  ) {}
+
+  async plan(request: TaxonomyRequest): Promise<TaxonomyEntry[]> {
+    const fetcher = this.fetcher;
+    const requestController = new AbortController();
+    const response = await withTimeout((signal) => fetcher(
+      `${this.endpoint.baseUrl}/responses`,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.endpoint.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: this.endpoint.model,
+          store: false,
+          instructions: buildTaxonomyInstructions(request.maxTitles),
+          input: JSON.stringify(request),
+          text: {
+            format: {
+              type: 'json_schema',
+              name: 'tab_taxonomy',
+              strict: true,
+              schema: taxonomySchema,
+            },
+          },
+        }),
+        signal,
+      },
+    ), this.requestTimeoutMs, requestController);
+
+    if (!response.ok) {
+      throw new Error('taxonomy_request_failed');
+    }
+
+    let payload: unknown;
+    try {
+      payload = await withTimeout(
+        () => response.json(),
+        this.requestTimeoutMs,
+        requestController,
+      );
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message === 'classification_request_timeout') {
+        throw error;
+      }
+      throw new Error('taxonomy_invalid_response');
+    }
+
+    const outputText = extractOutputText(payload);
+    if (outputText === null) {
+      throw new Error('taxonomy_invalid_response');
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(outputText);
+    } catch {
+      throw new Error('taxonomy_invalid_response');
+    }
+    return resolveTaxonomy(parsed, request);
+  }
+}
+
+function extractOutputText(payload: unknown): string | null {
+  if (!isRecord(payload) || !Array.isArray(payload.output)) {
+    return null;
+  }
+  for (const item of payload.output) {
+    if (!isRecord(item) || !Array.isArray(item.content)) {
+      continue;
+    }
+    for (const content of item.content) {
+      if (isRecord(content) && content.type === 'output_text' && typeof content.text === 'string') {
+        return content.text;
+      }
+    }
+  }
+  return null;
+}

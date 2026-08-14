@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "Tab Organizer"
+  },
+  "extensionDescription": {
+    "message": "사용자 소유 OpenAI, Anthropic, Google API 키로 Chrome 탭을 검토하고 정리합니다."
+  },
+  "actionTitle": {
+    "message": "Tab Organizer 열기"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "extensionName": {
+    "message": "Tab Organizer"
+  },
+  "extensionDescription": {
+    "message": "ご自身の OpenAI、Anthropic、Google API キーで Chrome タブを確認して整理します。"
+  },
+  "actionTitle": {
+    "message": "Tab Organizer を開く"
+  }
+}
