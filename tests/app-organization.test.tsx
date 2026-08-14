@@ -352,6 +352,31 @@ describe('App organization flows', () => {
     expect(await screen.findByText('Applied changes: 2 · Skipped changes: 1')).toBeVisible();
   });
 
+  it('says which windows a proposal covered, so a restored one is not mistaken', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    const single = await organization.review();
+    // What an earlier all-windows run leaves behind: changes from more than one window.
+    organization.pendingProposal = {
+      ...single,
+      scope: 'all',
+      changes: single.changes.map((change, index) => ({
+        ...change,
+        windowId: index === 0 ? 4071 : 3088,
+        blockedReason: null,
+        splitViewId: null,
+      })),
+    };
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Review' }));
+
+    expect(await screen.findByText(/Reviewed: every window/)).toBeVisible();
+    // The window numbers only make sense once the scope is stated.
+    expect(screen.getByText(/Work · Window 1/)).toBeVisible();
+    expect(screen.getByText(/Other · Window 2/)).toBeVisible();
+  });
+
   it('restores a review left pending by an earlier session without running it again', async () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
@@ -426,19 +451,19 @@ describe('App organization flows', () => {
     };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    const syncAll = screen.getByRole('button', { name: 'Sync all windows' });
     const syncCurrent = screen.getByRole('button', { name: 'Sync current window' });
 
-    await user.click(syncAll);
-    expect(syncAll).toBeDisabled();
+    await user.click(syncCurrent);
     expect(syncCurrent).toBeDisabled();
     expect(screen.getByRole('status', { name: 'Reviewing tabs' })).toBeVisible();
     expect(screen.getByRole('region', { name: 'Review tab changes' })).toHaveAttribute('aria-busy', 'true');
+    // A second press while the first is in flight must not start another review.
     await user.click(syncCurrent);
     expect(reviewCalls).toBe(1);
 
     resolveReview?.(proposal);
-    expect(await screen.findByText('Unchanged tabs: 2')).toBeVisible();
+    // The same banner now states the scope the proposal came from.
+    expect(await screen.findByText(/Reviewed: this window · Unchanged tabs: 2/)).toBeVisible();
   });
 
   it('locks a specific review row without activating the tab', async () => {
@@ -483,7 +508,7 @@ describe('App organization flows', () => {
     });
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync all windows' }));
+    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
 
     expect(await screen.findByText('Work · Window 1 (1)')).toBeVisible();
     expect(screen.getByText('Docs · Window 2 (1)')).toBeVisible();
@@ -536,7 +561,7 @@ describe('App organization flows', () => {
 
     await user.click(screen.getByRole('button', { name: 'Apply selected (1)' }));
 
-    expect(screen.getByRole('button', { name: 'Sync all windows' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Sync current window' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Sync current window' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Reject group Work' })).toBeDisabled();
     expect(screen.getByRole('checkbox', { name: /Normal/ })).toBeDisabled();

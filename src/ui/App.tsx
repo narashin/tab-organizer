@@ -418,24 +418,16 @@ export function App({
           <>
             <section className="card" aria-labelledby="review-title" aria-busy={isReviewing}>
               <h1 className="card__title" id="review-title">{text.reviewTitle}</h1>
-              <div className="btn-row">
-                <button
-                  type="button"
-                  className="btn btn--primary"
-                  disabled={!settings.organizationEnabled || isReviewing || isApplying}
-                  onClick={() => void handleReview('all')}
-                >
-                  {text.syncAll}
-                </button>
-                <button
-                  type="button"
-                  className="btn btn--secondary"
-                  disabled={!settings.organizationEnabled || isReviewing || isApplying}
-                  onClick={() => void handleReview('current')}
-                >
-                  {text.syncCurrent}
-                </button>
-              </div>
+              {/* One window at a time: a Chrome group cannot span windows, so reviewing every
+                  window produced a list of groups the user could not see from where they stood. */}
+              <button
+                type="button"
+                className="btn btn--primary btn--block"
+                disabled={!settings.organizationEnabled || isReviewing || isApplying}
+                onClick={() => void handleReview('current')}
+              >
+                {text.syncCurrent}
+              </button>
               {isReviewing ? (
                 <p className="banner banner--info" role="status" aria-label={text.reviewingTabs}>{text.reviewingTabs}</p>
               ) : null}
@@ -452,7 +444,13 @@ export function App({
 
               {proposal === null ? <p className="empty">{text.reviewEmpty}</p> : (
                 <>
-                  <p className="banner banner--info">{text.unchangedCount}: {proposal.unchangedCount}</p>
+                  {/* A proposal outlives the popup, so a restored list has to say which run made
+                      it. Without this an all-windows review reads as a current-window one. */}
+                  <p className="banner banner--info">
+                    {text.reviewScopeLabel}: {proposal.scope === 'all'
+                      ? text.reviewScopeAll
+                      : text.reviewScopeCurrent} · {text.unchangedCount}: {proposal.unchangedCount}
+                  </p>
                   {proposal.failedTabCount > 0 ? (
                     <p className="banner banner--warning" role="status">
                       {text.failedTabCount}: {proposal.failedTabCount}

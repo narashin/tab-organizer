@@ -44,6 +44,21 @@ describe('popup width', () => {
     );
   });
 
+  it('suppresses sideways scrolling instead of sizing against the viewport', async () => {
+    const styles = await readFile(resolve(process.cwd(), 'src/ui/styles.css'), 'utf8');
+
+    // A document scrollbar takes width the fixed-width shell will not give up, which is what put a
+    // horizontal scrollbar in the popup. Hiding sideways overflow removes it without clipping
+    // anything, because nothing is meant to be wider than the shell.
+    expect(styles).toMatch(
+      /html:has\(\.app-shell--popup\),\s*body:has\(\.app-shell--popup\)\s*\{[^}]*overflow-x: hidden;/,
+    );
+    // Sizing the shell against the viewport collapsed the popup: Chrome opens it small and grows it
+    // to the content, so a viewport-relative cap can never be exceeded.
+    expect(styles).not.toMatch(/\.app-shell--popup\s*\{[^}]*100vw/);
+    expect(styles).not.toMatch(/\.app-shell--popup\s*\{[^}]*100vh/);
+  });
+
   it('round-trips a stored width and clamps whatever was persisted earlier', () => {
     const storage = new MemoryStorage();
     const store = createLocalPopupWidthStore(storage);

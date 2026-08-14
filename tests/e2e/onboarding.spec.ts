@@ -127,6 +127,29 @@ test('loads the extension and completes localized BYOK onboarding', async () => 
       .find((input) => input.mode === 'synchronization');
     expect(synchronizationInput?.tabs).toHaveLength(1);
     await expect(page.locator('summary').filter({ hasText: 'E2E Work' })).toBeVisible();
+
+    // A second window must stay out of a current-window review. The background runs in a service
+    // worker, which belongs to no window, so asking Chrome for "the current window" once answered
+    // with tabs from every window and the review listed groups the user could not see.
+    const otherWindow = await serviceWorker.evaluate(async () => {
+      const created = await chrome.windows.create({ url: 'https://work.example.test/other', focused: false });
+      return { windowId: created?.id ?? null, tabId: created?.tabs?.[0]?.id ?? null };
+    });
+    expect(otherWindow.windowId).not.toBeNull();
+    await page.bringToFront();
+
+    const scopedReview = await page.evaluate(async () => {
+      const review = await chrome.runtime.sendMessage({ type: 'sync/review', scope: 'current' }) as {
+        proposal?: { changes: Array<{ tabId: number; windowId: number }> };
+      };
+      return review.proposal?.changes.map((change) => change.windowId) ?? null;
+    });
+    expect(scopedReview).not.toBeNull();
+    expect(new Set(scopedReview ?? []).size).toBe(1);
+    expect(scopedReview).not.toContain(otherWindow.windowId);
+    await serviceWorker.evaluate(async (windowId) => {
+      if (windowId !== null) await chrome.windows.remove(windowId);
+    }, otherWindow.windowId);
     const directReview = await page.evaluate(async () => {
       const review = await chrome.runtime.sendMessage({ type: 'sync/review', scope: 'current' }) as {
         proposal?: { id: string; changes: Array<{ tabId: number; selected: boolean }> };

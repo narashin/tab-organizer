@@ -55,10 +55,14 @@ body {
   height: 100%;
 }
 
-/* The popup document sizes itself from its content; only the side panel fills a frame Chrome sets. */
+/* The popup document sizes itself from its content; only the side panel fills a frame Chrome sets.
+   Nothing is meant to be wider than the shell, so a sideways scrollbar can only be a defect: when
+   the frame is shorter than the shell, the document's own vertical scrollbar takes width that the
+   fixed-width shell will not give up, and Chrome answers with a horizontal scrollbar. */
 html:has(.app-shell--popup),
 body:has(.app-shell--popup) {
   height: auto;
+  overflow-x: hidden;
 }
 
 body {
@@ -114,7 +118,9 @@ button:disabled {
   position: relative;
   width: 400px;
   /* Chrome refuses to grow a popup vertically, so the height is whatever the content needs, capped
-     where Chrome stops honoring it. Past that the body scrolls, as it did before. */
+     where Chrome stops honoring it. Past that the body scrolls, as it did before.
+     No viewport units here: Chrome opens a popup small and grows it to fit the content, so a cap
+     measured against the viewport can never be exceeded and the frame stays at its opening size. */
   height: auto;
   max-height: 600px;
 }
