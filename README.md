@@ -1,93 +1,83 @@
 # Tab Organizer
 
-Tab Organizer is a Manifest V3 Chrome extension that organizes tabs with a user-provided API key. It supports OpenAI, Anthropic Claude, and Google Gemini, along with any OpenAI-compatible gateway. It supports English, Korean, and Japanese and does not provide a non-AI grouping fallback.
+A Chrome extension that sorts your open tabs into Chrome tab groups using an AI model you bring the key for. It supports OpenAI, Anthropic Claude, and Google Gemini, plus any OpenAI-compatible gateway. English, Korean, and Japanese.
 
-## Features
+Nothing is grouped without your approval: every run produces a list of proposed moves that you review, edit, and apply.
 
-- Organizes the first eligible page of a newly created tab once. Later navigation is not automatically regrouped.
-- Limits automatic classification across the extension profile to 30 classifier requests in a rolling 60-second window.
-- Reviews all eligible tabs in the current window or every normal window before applying changes.
-- Supports persistent group presets for private project names and domain-specific context.
-- Provides one-run exclusions, session-scoped tab locks, Split View protection, and the ten most recent undo operations.
-- Sends only ephemeral tab references, titles, hostnames, group descriptors, and preset context. The URL path is sent only if the user opts in, and the query string and fragment never are.
+## What it does
 
-## Requirements
+- **Review before anything moves.** Sync the current window or every window, then approve or reject each proposed group, deselect individual tabs, or lock a tab so it is never touched.
+- **Organizes new tabs once.** The first real page a new tab lands on can be grouped automatically. Later navigation in that tab is left alone.
+- **Presets** teach it names it could not guess — internal project codes, product names — with optional text cues that match locally, before any request is made.
+- **Undo.** The ten most recent operations can be reversed for tabs that are still where the extension put them. Your later manual changes are preserved.
+- **Split View safety.** Tabs in Chrome Split View are shown but never moved.
+- **Sends very little.** Tab titles, hostnames, existing group names, and preset descriptions. Never full URLs, page content, screenshots, cookies, forms, or history. The URL path is sent only if you turn that on, and the query string never is.
 
-- Chrome 116 or newer; Split View protection is activated when Chrome 140+ exposes `splitViewId`.
-- Node.js 20.19 or newer, 22.12 or newer, or 24 or newer.
-- npm 11 or a compatible npm release.
-- A `zip` command compatible with Info-ZIP for `npm run package`.
-- A dedicated API key with a spending limit, from OpenAI, Anthropic, or Google. A key is stored per provider, so switching providers does not ask for the key again.
+## Install
 
-The local verification environment uses Node.js 25.4.0 and npm 11.7.0.
+There is no Chrome Web Store listing yet, so install the packaged build by hand.
 
-## Local setup
+1. Download `tab-organizer.zip` from the [latest release](https://github.com/narashin/tab-organizer/releases) and unzip it.
+2. Open `chrome://extensions` and turn on **Developer mode** (top right).
+3. Click **Load unpacked** and select the unzipped folder — the one containing `manifest.json`.
+4. Pin the extension so the toolbar icon stays visible.
+
+Chrome 116 or newer is required. Split View protection turns on by itself on Chrome 140+.
+
+Updating means downloading the newer zip and pressing **Reload** on the extension card. Loading an unpacked extension makes Chrome show a "Disable developer mode extensions" warning on startup; that is Chrome talking about the install method, not about this extension.
+
+## Set it up
+
+Clicking the toolbar icon opens the popup. Drag its bottom-right corner to widen it, double-click that corner to reset the width, or choose **Open side panel** for a panel that stays open while you browse.
+
+In **Settings**:
+
+1. Pick an **AI provider**.
+2. Paste an API key for that provider. Chrome asks for permission to reach the provider's host the first time; the key is not saved if you decline.
+3. Leave the default model or type another one. Defaults are `gpt-5.6` (OpenAI), `claude-opus-5` (Anthropic), and `gemini-3.5-flash` (Google).
+4. Optionally set **Grouping breadth** — broad means fewer, larger groups — and decide whether new tabs are organized automatically.
+
+Each provider keeps its own key, model, and endpoint, so switching between them never asks you to paste a key again.
+
+Where to get a key: [OpenAI](https://platform.openai.com/api-keys), [Anthropic](https://console.anthropic.com/settings/keys), [Google AI Studio](https://aistudio.google.com/apikey). Create a dedicated key with a spending limit — a browser extension cannot keep a key as safely as a server can, and a key you can revoke on its own is worth the extra minute.
+
+To use a gateway instead of a provider's own endpoint, set **API base URL**. It must be `https`, except on `localhost` and `127.0.0.1`. Saving a different endpoint clears the previous validation result, so test the key again afterwards.
+
+## Using it
+
+1. Open **Review** and choose **Sync current window** or **Sync all windows**.
+2. Each proposed group appears as a row you can expand. Reject a whole group, uncheck single tabs, or lock a tab to keep it out of this and every later run.
+3. Press **Apply selected**. Right before moving anything, the extension rechecks each tab's window, URL, title, and current group, and skips whatever changed while you were reading.
+4. **History** lists recent operations with an undo button.
+
+If your tabs come back split too finely, widen **Grouping breadth**. If a group keeps getting a name you dislike, add a preset with the name you want.
+
+## Privacy
+
+Your key is stored only in this browser's extension-local storage, is never written to Chrome Sync or to logs, and is never shown back to the interface. Requests go to the provider you picked, or to the gateway address you typed — nowhere else. Locked and incognito tabs are dropped before a request is built.
+
+## Development
 
 ```bash
 npm install
-npm run build
+npm run build     # writes dist/
+npm test          # unit and integration tests
+npm run lint      # typecheck plus repository rules
+npm run test:e2e  # loads dist/ in a fresh Chromium, mocked providers, no real key
+npm run package   # builds and writes tab-organizer.zip
 ```
 
-Open `chrome://extensions`, enable Developer mode, choose Load unpacked, and select this repository's absolute `dist/` directory. Clicking the toolbar action opens the popup; drag its bottom-right corner to resize it, or use Open side panel for a persistent panel that renders the same interface.
+Load the absolute `dist/` directory with **Load unpacked** to run a development build. `npm run test:e2e` covers BYOK states, three locales, preset persistence, real Chrome group mutation and undo, and a 101-tab run across windows.
 
-In Settings, pick an AI provider, select a language, enter a dedicated key for that provider, confirm the default model for it (`gpt-5.6`, `claude-opus-5`, or `gemini-3.5-flash`) or enter another model ID, and choose whether first-page organization is enabled. Chrome asks for host access when a key is saved for a provider other than OpenAI, and the key is not stored if access is denied.
-
-To use a gateway instead of a provider's own endpoint, set API base URL to that endpoint, for example `https://gateway.example.com/v1`. The endpoint, the model, and the validation result are stored per provider. Chrome asks for host access the first time a non-default host is saved, and the endpoint is not changed if access is denied. The address must use https, except on `localhost` and `127.0.0.1` where http is accepted so a local runtime remains usable. Saving a different endpoint clears the previous validation result, so the key must be tested again before organization is re-enabled. Model IDs differ between providers, so the default `gpt-5.6` may need to change as well.
-
-## Workflow
-
-1. Define Presets for internal projects and product names when useful.
-2. Use Sync all windows or Sync current window.
-3. Review group summaries, reject a proposed group, lock a specific tab, or deselect tabs that should remain unchanged for this run.
-4. Apply selected changes. Split View tabs remain blocked until Split View is exited in Chrome.
-5. Use History to undo an extension operation for tabs that still exist and remain in the group applied by that operation. Later manual group changes are preserved. If an exact Chrome group ID is unavailable, undo falls back to the stored group title and color.
-
-Locking a tab excludes it before a classification request is built. A lock remains attached to that tab after navigation and ends when it is unlocked, closed, or the Chrome session ends.
-
-Immediately before each reviewed group move, the extension rechecks the selected tabs, locks, window, URL, title, current group, and Split View state. Automatic batches for the same window run serially, and a failed new-group metadata update attempts to restore each tab's prior Chrome group membership.
-
-The automatic request budget is shared by all windows and survives service-worker restarts for the current Chrome session. A batch that arrives after 30 classifier requests in the preceding 60 seconds is marked failed without calling the provider, moving tabs, or scheduling an automatic retry.
-
-## BYOK and privacy
-
-A browser extension cannot provide server-grade secrecy for a standard API key. The extension stores the key only in `chrome.storage.local`, restricts access to trusted extension contexts, never stores it in Chrome Sync, and never returns it in interface state or logs.
-
-Connection validation uses `GET <base URL>/models`. Classification uses the Responses API at `POST <base URL>/responses` with strict structured output and `store: false`. The base URL defaults to `https://api.openai.com/v1` and is user-configurable, so the destination host is whatever the user has saved. Full URLs, page content, screenshots, cookies, forms, and browsing history are not sent. Incognito and locked tabs are excluded before payload construction.
-
-See [Privacy](docs/privacy.md) for the complete data boundary and revocation guidance.
-
-## Verification and packaging
-
-```bash
-npm run typecheck
-npm run lint
-npm test
-npm run build
-npm run test:e2e
-npm audit --audit-level=high
-npm run package
-```
-
-`npm run test:e2e` launches a fresh Chromium profile with mocked provider endpoints. It verifies valid, invalid, and offline BYOK states; three locales; keyboard navigation; preset persistence; service-worker proposal rehydration; actual Chrome group mutation and undo; and a 101-tab acceptance run across multiple windows. It never uses a real API key.
-
-`npm run package` creates `tab-organizer.zip` with `manifest.json` at the archive root. The package contains no API key or test credential.
+Architecture notes and the rules this codebase follows live in [AGENTS.md](AGENTS.md).
 
 ## Permissions
 
-- `sidePanel`: persistent review interface.
-- `storage`: local settings, presets, history, and session state.
-- `tabs`: tab metadata, lifecycle, grouping, and undo.
-- `tabGroups`: group titles, colors, and window-scoped metadata.
-- `https://api.openai.com/*`: connection validation and classification only.
-- `optional_host_permissions` (`https://*/*`, `http://localhost/*`, `http://127.0.0.1/*`): declared broadly because a user-supplied gateway address cannot be known in advance. Nothing is granted at install time. Access is requested for one specific origin, only when the user saves a custom API base URL, and only after that address passes validation.
-
-## Environments
-
-| Environment | Credentials | Verification |
-| --- | --- | --- |
-| Local | Mocked provider responses by default; developer BYOK only for an explicit check | Typecheck, unit/integration tests, build, unpacked Chromium E2E |
-| Dev | Tester-owned limited-budget project key | Live connection smoke test and multilingual review |
-| Test | Deterministic mocks; dedicated test key only when explicitly enabled | Failure matrix, 100+ tabs, multi-window and Split View scenarios |
-| Prod | Every user supplies a key; no bundled credential | Package, permission, privacy, secret and accessibility audit |
-
-Publishing to the Chrome Web Store is intentionally outside this repository workflow.
+| Permission | Why |
+| --- | --- |
+| `sidePanel` | the panel version of the interface |
+| `storage` | settings, presets, history, and session state |
+| `tabs` | tab metadata, grouping, and undo |
+| `tabGroups` | group titles, colors, and window-scoped metadata |
+| `https://api.openai.com/*` | validating a key and classifying tabs |
+| optional hosts | nothing is granted at install time. Access to one specific origin is requested when you save a key for another provider or a custom endpoint |

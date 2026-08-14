@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import manifest from '../public/manifest.json';
+import packageJson from '../package.json';
 import englishMessages from '../public/_locales/en/messages.json';
 import japaneseMessages from '../public/_locales/ja/messages.json';
 import koreanMessages from '../public/_locales/ko/messages.json';
@@ -47,6 +48,12 @@ describe('Manifest V3 contract', () => {
       service_worker: 'assets/background.js',
       type: 'module',
     });
+  });
+
+  it('ships the same version in the manifest and the package', () => {
+    // A release is cut from the package version but installed from the manifest one; a mismatch
+    // would put a build in the store under a version nothing else recorded.
+    expect(manifest.version).toBe(packageJson.version);
   });
 
   it('keeps manifest locale keys at parity', () => {
