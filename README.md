@@ -4,6 +4,10 @@ A Chrome extension that sorts your open tabs into Chrome tab groups using an AI 
 
 Nothing is grouped without your approval: every run produces a list of proposed moves that you review, edit, and apply.
 
+![Chrome tab strip with tabs gathered into a Docs group and an API group](assets/screenshots/tab-strip.png)
+
+The groups above are real: the extension grouped those tabs through Chrome's own grouping API. Only the pages behind them are stand-ins.
+
 | Review | Presets | Settings |
 | --- | --- | --- |
 | ![Proposed groups waiting for approval](assets/screenshots/review.png) | ![A preset with a name, description, text cues, and a color](assets/screenshots/presets.png) | ![Provider, key, and model settings](assets/screenshots/settings.png) |
@@ -69,7 +73,8 @@ npm test          # unit and integration tests
 npm run lint      # typecheck plus repository rules
 npm run test:e2e  # loads dist/ in a fresh Chromium, mocked providers, no real key
 npm run package   # builds and writes tab-organizer.zip
-npm run screenshots  # rebuilds the README images from the built extension, all data mocked
+npm run screenshots  # rebuilds the interface images from the built extension, all data mocked
+npm run screenshots:tab-strip  # regroups real tabs and captures the tab strip (macOS only)
 ```
 
 Load the absolute `dist/` directory with **Load unpacked** to run a development build. `npm run test:e2e` covers BYOK states, three locales, preset persistence, real Chrome group mutation and undo, and a 101-tab run across windows.

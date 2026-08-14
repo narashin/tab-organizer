@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "npm run typecheck && node scripts/lint.mjs",
     "package": "npm run build && cd dist && zip -q -FS -r ../tab-organizer.zip .",
-    "screenshots": "node scripts/capture-screenshots.mjs"
+    "screenshots": "node scripts/capture-screenshots.mjs",
+    "screenshots:tab-strip": "node scripts/capture-tab-strip.mjs"
   },
   "dependencies": {
     "react": "19.2.7",
