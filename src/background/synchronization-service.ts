@@ -20,6 +20,7 @@ import {
 } from '../shared/grouping';
 import { planTabOrder, type TabOrderPlatform, type TabOrderStep } from './tab-order';
 import type { TabLockStore } from './tab-lock-store';
+import type { TabPlacementStore } from './tab-placement-store';
 import type { LocalStorageArea } from './settings-service';
 
 export interface BrowserTab {
@@ -182,6 +183,7 @@ export class SynchronizationService {
     // review sat waiting was still off by the time the tabs moved.
     private readonly getSortTabsEnabled: () => boolean | Promise<boolean> = () => false,
     private readonly tabOrder?: TabOrderPlatform,
+    private readonly placements?: TabPlacementStore,
   ) {}
 
   /**
@@ -322,8 +324,15 @@ export class SynchronizationService {
   private async reviewOnce(scope: ReviewScope): Promise<SynchronizationProposal> {
     const allTabs = await this.platform.listTabs(scope === 'ungrouped' ? 'current' : scope);
     const unlockedTabs = await this.locks.excludeLocked(allTabs);
+    // A grouped tab that has since navigated somewhere else is no longer settled, so the everyday
+    // review takes it back even though it has a group.
+    const drifted = scope === 'ungrouped' && this.placements !== undefined
+      ? new Set(await this.placements.driftedTabIds(unlockedTabs.map((tab) => ({
+        tabId: tab.tabId, groupId: tab.groupId, hostname: getHostname(tab.url),
+      }))))
+      : new Set<number>();
     const eligible = unlockedTabs.filter((tab) => !tab.incognito && getHostname(tab.url) !== '' &&
-      (scope !== 'ungrouped' || tab.groupId < 0));
+      (scope !== 'ungrouped' || tab.groupId < 0 || drifted.has(tab.tabId)));
     const presets = await this.presets.list();
 
     const windowIds = [...new Set(eligible.map((tab) => tab.windowId))];
@@ -650,6 +659,11 @@ export class SynchronizationService {
       }
     }
     await this.removeProposal(proposalId);
+    // What each moved tab was showing when it was grouped, so a later navigation can be noticed.
+    await this.placements?.record(valid.flatMap((change) => {
+      const hostname = getHostname(storedProposal.reviewedUrls.get(change.tabId) ?? '');
+      return hostname === '' ? [] : [{ tabId: change.tabId, hostname }];
+    }));
     return { applied, skipped, sortOutcome: await this.sortWindows(selectedWindowIds) };
   }
 

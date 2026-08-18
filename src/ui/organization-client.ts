@@ -76,7 +76,13 @@ export class RuntimeOrganizationClient implements OrganizationClient {
 
   private async request(request: OrganizationRequest): Promise<OrganizationResponse> {
     const response = await this.sendMessage(request);
-    if (!isRecord(response) || response.ok !== true) throw new Error('organization_request_failed');
+    if (!isRecord(response) || response.ok !== true) {
+      // The background knows why; carrying it here is what lets the interface say so.
+      throw new Error(typeof response === 'object' && response !== null && 'reason' in response &&
+        typeof response.reason === 'string' && response.reason.length > 0
+        ? response.reason
+        : 'organization_request_failed');
+    }
     return response as unknown as OrganizationResponse;
   }
 }

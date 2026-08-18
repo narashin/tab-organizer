@@ -12,6 +12,7 @@ import type {
 } from '../src/background/classifier';
 import { PresetStore } from '../src/background/preset-store';
 import { TabLockStore } from '../src/background/tab-lock-store';
+import { TabPlacementStore } from '../src/background/tab-placement-store';
 import type { LocalStorageArea, StoredValues } from '../src/background/settings-service';
 import { SettingsService } from '../src/background/settings-service';
 import {
@@ -480,7 +481,7 @@ describe('FirstPageOrganizer', () => {
     } as unknown as TabLockStore;
     const settings = new SettingsService(new MemoryStorage(), async () => ({ status: 'valid' }));
     await settings.saveAndTestApiKey('sk-project-valid', 'en-US');
-    registerTabLifecycle(organizer, locks, settings, () => 'en-US', () => undefined);
+    registerTabLifecycle(organizer, locks, new TabPlacementStore(new MemoryStorage()), settings, () => 'en-US', () => undefined);
     const chromeTab = {
       id: 42,
       windowId: 3,
@@ -549,7 +550,7 @@ describe('FirstPageOrganizer', () => {
       }),
     } as unknown as FirstPageOrganizer;
     const locks = { recordNavigation: vi.fn(async () => undefined) } as unknown as TabLockStore;
-    registerTabLifecycle(organizer, locks, settings, () => 'en-US', () => undefined);
+    registerTabLifecycle(organizer, locks, new TabPlacementStore(new MemoryStorage()), settings, () => 'en-US', () => undefined);
     const chromeTab = {
       id: 42,
       windowId: 3,
@@ -604,7 +605,7 @@ describe('FirstPageOrganizer', () => {
         enabled: true,
       }),
     } as unknown as SettingsService;
-    registerTabLifecycle(organizer, locks, settings, () => 'en-US', () => undefined);
+    registerTabLifecycle(organizer, locks, new TabPlacementStore(new MemoryStorage()), settings, () => 'en-US', () => undefined);
     const chromeTab = {
       id: 42,
       windowId: 3,
@@ -660,7 +661,7 @@ describe('FirstPageOrganizer', () => {
       }),
     } as unknown as FirstPageOrganizer;
     const locks = { recordNavigation: vi.fn(async () => undefined) } as unknown as TabLockStore;
-    registerTabLifecycle(organizer, locks, settings, () => 'en-US', () => undefined);
+    registerTabLifecycle(organizer, locks, new TabPlacementStore(new MemoryStorage()), settings, () => 'en-US', () => undefined);
     const chromeTab = {
       id: 42, windowId: 3, title: eligibleTab.title, url: eligibleTab.url,
       groupId: -1, incognito: false, status: 'complete',
@@ -708,7 +709,7 @@ describe('FirstPageOrganizer', () => {
     const locks = {
       removeClosedTab: vi.fn(async () => undefined),
     } as unknown as TabLockStore;
-    registerTabLifecycle(organizer, locks, settings, () => 'en-US', () => undefined);
+    registerTabLifecycle(organizer, locks, new TabPlacementStore(new MemoryStorage()), settings, () => 'en-US', () => undefined);
 
     createdListener?.({ id: 42, windowId: 3, groupId: -1, incognito: false } as chrome.tabs.Tab);
     await vi.waitFor(() => expect(settings.getOrganizationRuntimeConfig).toHaveBeenCalledOnce());
@@ -796,6 +797,7 @@ describe('FirstPageOrganizer', () => {
     registerTabLifecycle(
       {} as FirstPageOrganizer,
       {} as TabLockStore,
+      {} as TabPlacementStore,
       settings,
       () => 'en-US',
       () => undefined,

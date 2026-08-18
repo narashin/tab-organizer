@@ -14,6 +14,7 @@ import { PresetStore } from './preset-store';
 import type { LocalStorageArea, SettingsService } from './settings-service';
 import { SynchronizationService } from './synchronization-service';
 import { TabLockStore } from './tab-lock-store';
+import { TabPlacementStore } from './tab-placement-store';
 import type { SupportedLocale } from '../shared/localization';
 import { DEFAULT_GROUPING_GRANULARITY, type GroupingGranularity } from '../shared/grouping';
 
@@ -23,6 +24,7 @@ export function createChromeOrganizationHandler(settings: SettingsService) {
   const createId = () => crypto.randomUUID();
   const presets = new PresetStore(local, createId);
   const locks = new TabLockStore(session, Date.now);
+  const placements = new TabPlacementStore(session);
   const chromeTabs = new ChromeSynchronizationPlatform();
   const firstPagePlatform = new ChromeFirstPagePlatform(chromeTabs, presets);
   let locale: SupportedLocale = 'en';
@@ -77,6 +79,7 @@ export function createChromeOrganizationHandler(settings: SettingsService) {
     async () => (await settings.getOrganizationRuntimeConfig(chrome.i18n.getUILanguage()))
       .sortTabsEnabled,
     chromeTabs,
+    placements,
   );
   const service = new OrganizationService(
     presets,
@@ -88,6 +91,7 @@ export function createChromeOrganizationHandler(settings: SettingsService) {
   registerTabLifecycle(
     firstPage,
     locks,
+    placements,
     settings,
     () => chrome.i18n.getUILanguage(),
     (nextLocale) => { locale = nextLocale; },

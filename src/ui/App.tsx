@@ -111,6 +111,7 @@ export function App({
   const [proposal, setProposal] = useState<SynchronizationProposal | null>(null);
   const [applyResult, setApplyResult] = useState<ApplyResult | null>(null);
   const [notice, setNotice] = useState<'success' | 'error' | null>(null);
+  const [failureReason, setFailureReason] = useState<string | null>(null);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [presetDraft, setPresetDraft] = useState<PresetDraft>({
     name: '', description: '', cues: [], color: 'grey',
@@ -326,7 +327,16 @@ export function App({
 
   const run = async (operation: () => Promise<void>) => {
     setNotice(null);
-    try { await operation(); setNotice('success'); } catch { setNotice('error'); }
+    setFailureReason(null);
+    try {
+      await operation();
+      setNotice('success');
+    } catch (error: unknown) {
+      setNotice('error');
+      // One generic sentence for every failure left nothing to act on. The code the background
+      // reports is short and specific, so it is shown next to it.
+      setFailureReason(error instanceof Error ? error.message : null);
+    }
   };
 
   // Submitting the form is the user gesture Chrome needs, so the host prompt runs from here rather
@@ -443,8 +453,14 @@ export function App({
             .map((change) => change.tabId),
         ));
         setProposal((current) => current?.id === appliedProposalId ? null : current);
-        setOrganization(await organizationClient.getState());
       });
+      // Refreshing the lists is a follow-up, not part of the apply. Inside the same wrapper it
+      // could report a failure for tabs that had already been moved.
+      try {
+        setOrganization(await organizationClient.getState());
+      } catch {
+        setOrganizationLoadFailed(true);
+      }
     } finally {
       setIsApplying(false);
     }
@@ -494,6 +510,7 @@ export function App({
         {notice !== null ? (
           <p className={`banner banner--${notice === 'success' ? 'success' : 'error'}`} role="status">
             {notice === 'success' ? text.operationSuccess : text.operationError}
+            {notice === 'error' && failureReason !== null ? ` (${failureReason})` : null}
           </p>
         ) : null}
         {applyResult !== null ? (

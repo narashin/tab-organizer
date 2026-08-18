@@ -24,7 +24,17 @@ export interface OrganizationResponse {
   reviewing?: boolean;
   applyResult?: ApplyResult;
   error?: 'invalid_request' | 'operation_failed';
+  /**
+   * What actually went wrong, for the interface to show.
+   *
+   * The code used to be caught and dropped here, so every failure reached the user as one sentence
+   * that said nothing. A review of a handful of tabs is a single request, and when that request
+   * fails the whole review fails, which made the silence expensive.
+   */
+  reason?: string;
 }
+
+const FAILURE_REASON_MAX_LENGTH = 160;
 
 export type OrganizationMessageHandler = (message: unknown) => Promise<OrganizationResponse>;
 
@@ -65,8 +75,9 @@ export function createOrganizationMessageHandler(service: OrganizationService): 
         case 'sync/apply':
           return { ok: true, applyResult: await service.apply(message.proposalId, message.selectedTabIds) };
       }
-    } catch {
-      return { ok: false, error: 'operation_failed' };
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : 'unknown_error';
+      return { ok: false, error: 'operation_failed', reason: reason.slice(0, FAILURE_REASON_MAX_LENGTH) };
     }
   };
 }

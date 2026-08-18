@@ -4,6 +4,7 @@ import type { GroupColor, PresetStore } from './preset-store';
 import type { SynchronizationPlatform } from './synchronization-service';
 import type { OrderedTab, TabOrderPlatform } from './tab-order';
 import type { TabLockStore } from './tab-lock-store';
+import type { TabPlacementStore } from './tab-placement-store';
 import type { SettingsService } from './settings-service';
 
 export class ChromeSynchronizationPlatform implements SynchronizationPlatform, TabOrderPlatform {
@@ -187,6 +188,7 @@ export class ChromeActiveTabPlatform implements ActiveTabPlatform {
 export function registerTabLifecycle(
   organizer: FirstPageOrganizer,
   locks: TabLockStore,
+  placements: TabPlacementStore,
   settings: SettingsService,
   getSystemLocale: () => string,
   setLocale: (locale: 'en' | 'ko' | 'ja') => void,
@@ -265,7 +267,11 @@ export function registerTabLifecycle(
     timers.delete(tabId);
     createdTasks.delete(tabId);
     run('tab_cleanup_failed', tabId, async () => {
-      await Promise.all([locks.removeClosedTab(tabId), organizer.remove(tabId)]);
+      await Promise.all([
+        locks.removeClosedTab(tabId),
+        placements.removeClosedTab(tabId),
+        organizer.remove(tabId),
+      ]);
     });
   });
 }

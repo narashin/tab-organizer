@@ -17,6 +17,7 @@ import {
   type SynchronizationPlatform,
 } from '../src/background/synchronization-service';
 import { TabLockStore } from '../src/background/tab-lock-store';
+import { TabPlacementStore } from '../src/background/tab-placement-store';
 
 class MemoryStorage implements LocalStorageArea {
   readonly values: StoredValues = {};
@@ -89,10 +90,12 @@ function createHarness() {
   const platform = new RecordingPlatform();
   const presets = new PresetStore(local, () => 'preset-1');
   const locks = new TabLockStore(session, () => 100);
+  const placements = new TabPlacementStore(session);
   const service = new SynchronizationService(
     classifier, presets, locks, platform, () => 'en', () => 'proposal-1', session,
+    undefined, undefined, undefined, () => false, undefined, placements,
   );
-  return { service, classifier, platform, locks, presets, session };
+  return { service, classifier, platform, locks, presets, session, placements };
 }
 
 describe('SynchronizationService', () => {
@@ -1006,6 +1009,50 @@ describe('SynchronizationService', () => {
     );
     return service.review('all');
   };
+
+  it('takes a grouped tab back into the review once it has navigated elsewhere', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const windowTabs: BrowserTab[] = [
+      { tabId: 1, windowId: 8, title: 'Still here', url: 'https://a.test/x', groupId: 5, incognito: false },
+      { tabId: 2, windowId: 8, title: 'Moved on', url: 'https://sandy.test/x', groupId: 5, incognito: false },
+    ];
+    const classifier = new RecordingClassifier();
+    const platform: SynchronizationPlatform = {
+      listTabs: async () => windowTabs,
+      listGroups: async () => [
+        { groupId: 5, windowId: 8, ref: 'group-5', title: 'Settled', color: 'blue' },
+      ],
+      getTab: async (tabId) => windowTabs.find((tab) => tab.tabId === tabId) ?? null,
+      moveToExistingGroup: async () => undefined,
+      moveToNewGroup: async () => 1,
+    };
+    const placements = new TabPlacementStore(session);
+    // Both were grouped as a.test pages; only one still is.
+    await placements.record([
+      { tabId: 1, hostname: 'a.test' },
+      { tabId: 2, hostname: 'a.test' },
+    ]);
+    const service = new SynchronizationService(
+      classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
+      platform, () => 'en', () => 'drift', session, undefined, undefined, undefined,
+      () => false, undefined, placements,
+    );
+
+    await service.review('ungrouped');
+
+    expect(classifier.requests[0]?.tabs.map((tab) => tab.title)).toEqual(['Moved on']);
+  });
+
+  it('records where each tab was pointed when it was grouped', async () => {
+    const { service, placements } = createHarness();
+    const proposal = await service.review('current');
+
+    await service.apply(proposal.id, [4]);
+
+    // Without this the next everyday review has no way to tell that a grouped tab moved on.
+    expect(await placements.list()).toEqual([{ tabId: 4, hostname: 'a.test' }]);
+  });
 
   it('leaves settled groups out of a review, sending only the tabs with no group', async () => {
     const local = new MemoryStorage();

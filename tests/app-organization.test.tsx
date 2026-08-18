@@ -935,6 +935,45 @@ describe('App organization flows', () => {
     await expect(client.review('current')).resolves.toMatchObject({ id: 'proposal-1' });
   });
 
+  it('reports a successful apply even when refreshing the lists afterwards fails', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await screen.findByText(/Work \(/);
+    // The tabs have moved by the time this runs, so a failure here is not the apply failing.
+    organization.getState = async () => { throw new Error('storage_unavailable'); };
+
+    await user.click(screen.getByRole('button', { name: 'Apply selected (1)' }));
+
+    expect(await screen.findByText('Applied changes: 1 · Skipped changes: 0')).toBeVisible();
+    expect(screen.queryByText(/The operation failed/)).toBeNull();
+  });
+
+  it('shows the code the background reports, not one sentence for every failure', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    organization.review = async () => { throw new Error('classification_request_timeout'); };
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Review' }));
+
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+
+    // A review of a handful of tabs is one request, so its failure is the whole review's failure.
+    expect(await screen.findByText(/classification_request_timeout/)).toBeVisible();
+  });
+
+  it('carries the failure reason from the background through the client', async () => {
+    const client = new RuntimeOrganizationClient(async () => ({
+      ok: false,
+      error: 'operation_failed',
+      reason: 'classification_invalid_response',
+    }));
+
+    await expect(client.review('ungrouped')).rejects.toThrow('classification_invalid_response');
+  });
+
   it('rejects malformed successful organization responses', async () => {
     const malformed = [
       { action: 'review', response: { ok: true, proposal: { changes: null } } },

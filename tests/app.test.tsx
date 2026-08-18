@@ -295,7 +295,8 @@ describe('App', () => {
     };
     render(<App settingsClient={client} permissionBridge={grantAll} />);
 
-    expect(await screen.findByText('The operation failed. No fallback was used.')).toBeVisible();
+    // The banner now carries the code the background reported alongside the sentence.
+    expect(await screen.findByText(/The operation failed\. No fallback was used\./)).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Retry' }));
 
     expect(await screen.findByRole('heading', { name: 'Connect OpenAI' })).toBeVisible();
@@ -317,7 +318,8 @@ describe('App', () => {
       name: 'Organize the first page of new tabs automatically',
     }));
 
-    expect(await screen.findByText('The operation failed. No fallback was used.')).toBeVisible();
+    // The banner now carries the code the background reported alongside the sentence.
+    expect(await screen.findByText(/The operation failed\. No fallback was used\./)).toBeVisible();
   });
 
   it('offers alphabetical sorting as an opt-in, with what it costs written next to it', async () => {
