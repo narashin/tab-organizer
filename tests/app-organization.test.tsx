@@ -6,7 +6,11 @@ import { describe, expect, it } from 'vitest';
 import type { OrganizationState } from '../src/background/organization-service';
 import type { PresetDraft } from '../src/background/preset-store';
 import type { SettingsState } from '../src/background/settings-service';
-import type { ApplyResult, SynchronizationProposal } from '../src/background/synchronization-service';
+import type {
+  ApplyResult,
+  ReviewScope,
+  SynchronizationProposal,
+} from '../src/background/synchronization-service';
 import {
   translations,
   withProviderName,
@@ -95,9 +99,11 @@ class MemoryOrganizationClient implements OrganizationClient {
     this.state = { ...this.state, failedTabIds: this.state.failedTabIds.filter((id) => id !== tabId) };
     return this.state;
   }
-  async review(): Promise<SynchronizationProposal> {
+  reviewedScopes: ReviewScope[] = [];
+  async review(scope: ReviewScope = 'current'): Promise<SynchronizationProposal> {
+    this.reviewedScopes.push(scope);
     return {
-      id: 'proposal-1', scope: 'current', unchangedCount: 2, failedTabs: [], skippedGroups: [], planFailureReason: null,
+      id: 'proposal-1', scope, unchangedCount: 2, failedTabs: [], skippedGroups: [], planFailureReason: null,
       changes: [
         { tabId: 1, windowId: 3, title: 'Normal', hostname: 'normal.test', currentGroup: null, currentGroupId: -1,
           target: { kind: 'new_group', ref: null, groupId: null, title: 'Work', color: 'grey', description: 'Work tabs' },
@@ -343,7 +349,7 @@ describe('App organization flows', () => {
     const organization = new MemoryOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
     const workSummary = screen.getByText(/Work \(/);
     await user.click(workSummary);
 
@@ -366,7 +372,7 @@ describe('App organization flows', () => {
     const organization = new MemoryOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
     const workSummary = screen.getByText(/Work \(/);
     await user.click(workSummary);
     const workDetails = workSummary.closest('details');
@@ -385,7 +391,7 @@ describe('App organization flows', () => {
     const organization = new MemoryOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
 
     const blockedMessage = await screen.findByText(/Split View: keep unchanged/);
     expect(blockedMessage).not.toBeVisible();
@@ -402,7 +408,7 @@ describe('App organization flows', () => {
     const organization = new PartialSelectionOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
     await user.click(screen.getByText(/Work \(/));
 
     await user.click(screen.getByRole('checkbox', { name: /Normal/ }));
@@ -419,10 +425,23 @@ describe('App organization flows', () => {
     organization.applyResult = { applied: 2, skipped: 1, sortOutcome: null };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
     await user.click(screen.getByRole('button', { name: 'Apply selected (1)' }));
 
     expect(await screen.findByText('Applied changes: 2 · Skipped changes: 1')).toBeVisible();
+  });
+
+  it('reviews only the active tab when asked, and says so in the scope line', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Review' }));
+
+    await user.click(screen.getByRole('button', { name: 'Sync this tab' }));
+
+    // A whole-window run costs a request per five tabs; this asks about one tab.
+    expect(organization.reviewedScopes).toEqual(['active']);
+    expect(await screen.findByText(/Reviewed: this tab/)).toBeVisible();
   });
 
   it('says which windows a proposal covered, so a restored one is not mistaken', async () => {
@@ -481,7 +500,7 @@ describe('App organization flows', () => {
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
 
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(await screen.findByRole('button', { name: 'Sync current window' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync ungrouped tabs' }));
 
     const progress = await screen.findByRole('status', { name: 'Reviewing tabs' });
     expect(within(progress).getByText(/runs in the background/)).toBeVisible();
@@ -520,7 +539,7 @@ describe('App organization flows', () => {
     const user = userEvent.setup();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={new GroupProposalOrganizationClient()} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
     await user.click(await screen.findByText(/Work \(2\)/));
 
     expect(screen.getByRole('button', { name: 'Apply selected (2)' })).toBeEnabled();
@@ -642,7 +661,7 @@ describe('App organization flows', () => {
     };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    const syncCurrent = screen.getByRole('button', { name: 'Sync current window' });
+    const syncCurrent = screen.getByRole('button', { name: 'Sync ungrouped tabs' });
 
     await user.click(syncCurrent);
     expect(syncCurrent).toBeDisabled();
@@ -662,7 +681,7 @@ describe('App organization flows', () => {
     const organization = new MemoryOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
     await user.click(screen.getByText(/Work \(/));
 
     await user.click(screen.getByRole('button', { name: 'Lock Normal' }));
@@ -679,7 +698,7 @@ describe('App organization flows', () => {
     const user = userEvent.setup();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={new GroupProposalOrganizationClient()} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
 
     expect(screen.getByText('Selected changes: 2')).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Deselect all in Work' }));
@@ -703,7 +722,7 @@ describe('App organization flows', () => {
     });
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
 
     expect(await screen.findByText('Work · Window 1 (1)')).toBeVisible();
     expect(screen.getByText('Docs · Window 2 (1)')).toBeVisible();
@@ -714,7 +733,7 @@ describe('App organization flows', () => {
     const user = userEvent.setup();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={new ConflictOrganizationClient()} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
 
     const summary = screen.getByText('Split View conflict (2)');
     await user.click(summary);
@@ -736,7 +755,7 @@ describe('App organization flows', () => {
     };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
     const apply = screen.getByRole('button', { name: 'Apply selected (1)' });
 
     await user.click(apply);
@@ -754,13 +773,13 @@ describe('App organization flows', () => {
     organization.apply = async () => new Promise((resolve) => { resolveApply = resolve; });
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
     await user.click(screen.getByText(/Work \(/));
 
     await user.click(screen.getByRole('button', { name: 'Apply selected (1)' }));
 
-    expect(screen.getByRole('button', { name: 'Sync current window' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Sync current window' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Sync ungrouped tabs' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Sync ungrouped tabs' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Deselect all in Work' })).toBeDisabled();
     expect(screen.getByRole('checkbox', { name: /Normal/ })).toBeDisabled();
     resolveApply?.({ applied: 1, skipped: 0, sortOutcome: null });
@@ -868,6 +887,28 @@ describe('App organization flows', () => {
     expect(await screen.findByText('No presets yet.')).toBeVisible();
     expect(attempts).toBe(2);
   });
+
+  it.each(['all', 'current', 'active', 'ungrouped'] satisfies ReviewScope[])(
+    'accepts a proposal reviewed with the %s scope',
+    async (scope) => {
+      // Twice now a new scope reached the background but not this validator, and every proposal was
+      // rejected: the review section looked unreviewed with nothing to explain it.
+      const client = new RuntimeOrganizationClient(async () => ({
+        ok: true,
+        proposal: {
+          id: 'proposal-1',
+          scope,
+          unchangedCount: 0,
+          failedTabs: [],
+          skippedGroups: [],
+          planFailureReason: null,
+          changes: [],
+        },
+      }));
+
+      await expect(client.review(scope)).resolves.toMatchObject({ scope });
+    },
+  );
 
   it('accepts a proposal in the shape the background actually sends', async () => {
     // The client validates every proposal, so a field renamed on one side and not the other rejects

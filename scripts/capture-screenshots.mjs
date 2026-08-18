@@ -102,7 +102,7 @@ try {
   // Reload first: the notice from saving the key has nothing to do with what this image shows.
   await popup.reload();
   await popup.getByRole('button', { name: 'Review' }).click();
-  await popup.getByRole('button', { name: 'Sync current window' }).click();
+  await popup.getByRole('button', { name: 'Sync ungrouped tabs' }).click();
   // The first summary on screen can be the "groups left uncreated" block, which is not a proposal.
   const group = popup.locator('details.group', { has: popup.locator('.check-row') }).first();
   await group.locator('summary').waitFor();

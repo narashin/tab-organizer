@@ -1,7 +1,7 @@
 import type { OrganizationState } from '../background/organization-service';
 import type { OrganizationRequest, OrganizationResponse } from '../background/organization-messages';
 import type { PresetDraft } from '../background/preset-store';
-import type { ApplyResult, SynchronizationProposal } from '../background/synchronization-service';
+import type { ApplyResult, ReviewScope, SynchronizationProposal } from '../background/synchronization-service';
 
 /**
  * What the background has for the review section right now.
@@ -25,7 +25,7 @@ export interface OrganizationClient {
   unlockTab(tabId: number): Promise<OrganizationState>;
   unlockAndAnalyze(tabId: number): Promise<OrganizationState>;
   retryFirstPage(tabId: number): Promise<OrganizationState>;
-  review(scope: 'all' | 'current'): Promise<SynchronizationProposal>;
+  review(scope: ReviewScope): Promise<SynchronizationProposal>;
   reviewStatus(): Promise<ReviewStatus>;
   apply(proposalId: string, selectedTabIds: number[]): Promise<ApplyResult>;
 }
@@ -46,7 +46,7 @@ export class RuntimeOrganizationClient implements OrganizationClient {
   unlockAndAnalyze(tabId: number) { return this.requestState({ type: 'locks/unlock-and-analyze', tabId }); }
   retryFirstPage(tabId: number) { return this.requestState({ type: 'automatic/retry', tabId }); }
 
-  async review(scope: 'all' | 'current'): Promise<SynchronizationProposal> {
+  async review(scope: ReviewScope): Promise<SynchronizationProposal> {
     const response = await this.request({ type: 'sync/review', scope });
     if (!isSynchronizationProposal(response.proposal)) throw new Error('organization_request_failed');
     return response.proposal;
@@ -93,10 +93,16 @@ function isOrganizationState(value: unknown): value is OrganizationState {
 
 function isSynchronizationProposal(value: unknown): value is SynchronizationProposal {
   return isRecord(value) && typeof value.id === 'string' &&
-    (value.scope === 'all' || value.scope === 'current') &&
+    isReviewScope(value.scope) &&
     Array.isArray(value.changes) && value.changes.every(isSynchronizationChange) &&
     typeof value.unchangedCount === 'number' &&
     Array.isArray(value.failedTabs) && value.failedTabs.every(isFailedTab);
+}
+
+// Kept beside the proposal check on purpose: every time a scope was added and this list was not,
+// the popup rejected every proposal and the review section simply looked unreviewed.
+function isReviewScope(value: unknown): value is ReviewScope {
+  return value === 'all' || value === 'current' || value === 'active' || value === 'ungrouped';
 }
 
 function isFailedTab(value: unknown): boolean {

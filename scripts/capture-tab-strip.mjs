@@ -65,7 +65,7 @@ try {
   }
   await popup.bringToFront();
   await popup.getByRole('button', { name: 'Review' }).click();
-  await popup.getByRole('button', { name: 'Sync current window' }).click();
+  await popup.getByRole('button', { name: 'Sync ungrouped tabs' }).click();
   await popup.locator('summary').first().waitFor();
   await popup.getByRole('button', { name: /Apply selected/ }).click();
   await popup.waitForTimeout(1500);

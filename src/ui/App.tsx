@@ -4,12 +4,17 @@ import type { OrganizationState } from '../background/organization-service';
 import { normalizeGroupTitle } from '../background/synchronization-service';
 import type { GroupColor, PresetDraft } from '../background/preset-store';
 import type { SettingsState } from '../background/settings-service';
-import type { ApplyResult, SynchronizationProposal } from '../background/synchronization-service';
+import type {
+  ApplyResult,
+  ReviewScope,
+  SynchronizationProposal,
+} from '../background/synchronization-service';
 import {
   fillPlaceholders,
   translations,
   withProviderName,
   type LocaleSelection,
+  type SupportedLocale,
   type TranslationKey,
 } from '../shared/localization';
 import { normalizeBaseUrl } from '../shared/base-url';
@@ -384,7 +389,7 @@ export function App({
     });
   };
 
-  const handleReview = async (scope: 'all' | 'current') => {
+  const handleReview = async (scope: ReviewScope) => {
     if (organizationClient === undefined || isReviewing || isApplying) return;
     setIsReviewing(true);
     setApplyResult(null);
@@ -523,9 +528,9 @@ export function App({
                 type="button"
                 className="btn btn--primary btn--block"
                 disabled={!settings.organizationEnabled || isReviewing || isApplying}
-                onClick={() => void handleReview('current')}
+                onClick={() => void handleReview('ungrouped')}
               >
-                {text.syncCurrent}
+                {text.syncUngrouped}
               </button>
               {isReviewing ? (
                 <div className="banner banner--info progress" role="status" aria-label={text.reviewingTabs}>
@@ -538,25 +543,36 @@ export function App({
                   </span>
                 </div>
               ) : null}
-              <button
-                type="button"
-                className="btn btn--ghost btn--block"
-                disabled={isReviewing || isApplying}
-                onClick={() => void run(async () => {
-                  if (organizationClient !== undefined) setOrganization(await organizationClient.lockActiveTab());
-                })}
-              >
-                {text.lockCurrent}
-              </button>
+              {/* A whole window costs a request per five tabs. The common small question is where
+                  the tab in front of you belongs among the groups that already exist. */}
+              <div className="btn-row">
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  disabled={!settings.organizationEnabled || isReviewing || isApplying}
+                  onClick={() => void handleReview('active')}
+                >
+                  {text.syncActiveTab}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  disabled={isReviewing || isApplying}
+                  onClick={() => void run(async () => {
+                    if (organizationClient !== undefined) setOrganization(await organizationClient.lockActiveTab());
+                  })}
+                >
+                  {text.lockCurrent}
+                </button>
+              </div>
 
               {proposal === null ? <p className="empty">{text.reviewEmpty}</p> : (
                 <>
                   {/* A proposal outlives the popup, so a restored list has to say which run made
                       it. Without this an all-windows review reads as a current-window one. */}
                   <p className="banner banner--info">
-                    {text.reviewScopeLabel}: {proposal.scope === 'all'
-                      ? text.reviewScopeAll
-                      : text.reviewScopeCurrent} · {text.unchangedCount}: {proposal.unchangedCount}
+                    {text.reviewScopeLabel}: {reviewScopeText(text, proposal.scope)}
+                    {' · '}{text.unchangedCount}: {proposal.unchangedCount}
                   </p>
                   {/* Named rather than counted: these tabs were never classified, so the only way
                       to act on them is to know which ones they are. */}
@@ -1271,6 +1287,17 @@ function LockIcon() {
       <rect x="3" y="7" width="10" height="6.75" rx="1.75" fill="currentColor" />
     </svg>
   );
+}
+
+/** Names the scope a stored proposal was made with, including the ones no button produces now. */
+function reviewScopeText(
+  text: (typeof translations)[SupportedLocale],
+  scope: ReviewScope,
+): string {
+  if (scope === 'all') return text.reviewScopeAll;
+  if (scope === 'active') return text.reviewScopeActive;
+  if (scope === 'ungrouped') return text.reviewScopeUngrouped;
+  return text.reviewScopeCurrent;
 }
 
 /** Two rows of dots: the conventional mark for something that can be dragged. */

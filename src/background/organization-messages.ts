@@ -1,6 +1,6 @@
 import type { OrganizationService, OrganizationState } from './organization-service';
 import type { GroupColor, PresetDraft } from './preset-store';
-import type { ApplyResult, SynchronizationProposal } from './synchronization-service';
+import type { ApplyResult, ReviewScope, SynchronizationProposal } from './synchronization-service';
 
 export type OrganizationRequest =
   | { type: 'organization/get' }
@@ -13,7 +13,7 @@ export type OrganizationRequest =
   | { type: 'locks/unlock'; tabId: number }
   | { type: 'locks/unlock-and-analyze'; tabId: number }
   | { type: 'automatic/retry'; tabId: number }
-  | { type: 'sync/review'; scope: 'all' | 'current' }
+  | { type: 'sync/review'; scope: ReviewScope }
   | { type: 'sync/latest' }
   | { type: 'sync/apply'; proposalId: string; selectedTabIds: number[] };
 
@@ -93,7 +93,8 @@ function isOrganizationRequest(value: unknown): value is OrganizationRequest {
     case 'automatic/retry':
       return typeof value.tabId === 'number';
     case 'sync/review':
-      return value.scope === 'all' || value.scope === 'current';
+      return value.scope === 'all' || value.scope === 'current' ||
+        value.scope === 'active' || value.scope === 'ungrouped';
     case 'sync/apply':
       return typeof value.proposalId === 'string' &&
         Array.isArray(value.selectedTabIds) && value.selectedTabIds.every((id) => typeof id === 'number');

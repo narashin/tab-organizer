@@ -28,7 +28,13 @@ export class ChromeSynchronizationPlatform implements SynchronizationPlatform, T
     await chrome.tabGroups.move(groupId, { index });
   }
 
-  async listTabs(scope: 'all' | 'current') {
+  async listTabs(scope: 'all' | 'current' | 'active') {
+    if (scope === 'active') {
+      // The one tab the user is looking at, which is the whole point of the narrow review.
+      return (await chrome.tabs.query({ active: true, currentWindow: true }))
+        .map(toBrowserTab)
+        .filter(isDefined);
+    }
     if (scope === 'current') {
       return (await chrome.tabs.query({ currentWindow: true })).map(toBrowserTab).filter(isDefined);
     }

@@ -118,7 +118,7 @@ test('loads the extension and completes localized BYOK onboarding', async () => 
     expect(browserState.tabs.some((tab) => tab.url?.startsWith('https://work.example.test/'))).toBe(true);
     await page.getByRole('button', { name: 'Review' }).click();
     const synchronizationRequestStart = classificationInputs.length;
-    await page.getByRole('button', { name: 'Sync current window' }).click();
+    await page.getByRole('button', { name: 'Sync ungrouped tabs' }).click();
     await expect.poll(() => classificationInputs
       .slice(synchronizationRequestStart)
       .some((input) => input.mode === 'synchronization')).toBe(true);

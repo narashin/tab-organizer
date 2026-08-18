@@ -1,6 +1,6 @@
 import type { FirstPageOrganizer, OrganizableTab } from './first-page-organizer';
 import type { Preset, PresetDraft, PresetStore } from './preset-store';
-import type { SynchronizationProposal, SynchronizationService } from './synchronization-service';
+import type { ReviewScope, SynchronizationProposal, SynchronizationService } from './synchronization-service';
 import type { TabLock, TabLockStore } from './tab-lock-store';
 
 export interface OrganizationState {
@@ -109,7 +109,7 @@ export class OrganizationService {
     return this.getState();
   }
 
-  review(scope: 'all' | 'current'): Promise<SynchronizationProposal> {
+  review(scope: ReviewScope): Promise<SynchronizationProposal> {
     return this.synchronization.review(scope);
   }
 

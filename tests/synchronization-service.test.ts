@@ -59,8 +59,12 @@ class RecordingPlatform implements SynchronizationPlatform {
   closedTabs = new Set<number>();
   currentTabs = tabs.map((tab) => ({ ...tab }));
 
-  async listTabs(scope: 'all' | 'current') {
+  /** Which tab Chrome would report as active, when a review asks for that scope only. */
+  activeTabId = 4;
+
+  async listTabs(scope: 'all' | 'current' | 'active') {
     const openTabs = this.currentTabs.filter((tab) => !this.closedTabs.has(tab.tabId));
+    if (scope === 'active') return openTabs.filter((tab) => tab.tabId === this.activeTabId);
     return scope === 'current' ? openTabs.filter((tab) => tab.windowId === 10) : openTabs;
   }
   async listGroups() { return []; }
@@ -1002,6 +1006,54 @@ describe('SynchronizationService', () => {
     );
     return service.review('all');
   };
+
+  it('leaves settled groups out of a review, sending only the tabs with no group', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const windowTabs: BrowserTab[] = [
+      { tabId: 1, windowId: 8, title: 'Grouped A', url: 'https://a.test/x', groupId: 5, incognito: false },
+      { tabId: 2, windowId: 8, title: 'Grouped B', url: 'https://b.test/x', groupId: 5, incognito: false },
+      { tabId: 3, windowId: 8, title: 'Loose C', url: 'https://c.test/x', groupId: -1, incognito: false },
+      { tabId: 4, windowId: 8, title: 'Loose D', url: 'https://d.test/x', groupId: -1, incognito: false },
+    ];
+    const classifier = new RecordingClassifier();
+    const platform: SynchronizationPlatform = {
+      listTabs: async () => windowTabs,
+      listGroups: async () => [
+        { groupId: 5, windowId: 8, ref: 'group-5', title: 'Settled', color: 'blue' },
+      ],
+      getTab: async (tabId) => windowTabs.find((tab) => tab.tabId === tabId) ?? null,
+      moveToExistingGroup: async () => undefined,
+      moveToNewGroup: async () => 1,
+    };
+    const service = new SynchronizationService(
+      classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
+      platform, () => 'en', () => 'ungrouped', session,
+    );
+
+    const proposal = await service.review('ungrouped');
+
+    // Grouped tabs are the settled part of a window: sending them costs requests and invites the
+    // model to undo a grouping the user is happy with.
+    expect(classifier.requests[0]?.tabs.map((tab) => tab.title)).toEqual(['Loose C', 'Loose D']);
+    // The groups themselves are still offered as targets.
+    expect(classifier.requests[0]?.groups.map((group) => group.title)).toEqual(['Settled']);
+    expect(proposal.scope).toBe('ungrouped');
+  });
+
+  it('reviews the active tab alone, and creates its group despite the size floor', async () => {
+    const { service, classifier } = createHarness();
+
+    const proposal = await service.review('active');
+
+    // One request for one tab, instead of a request per five tabs across the window.
+    expect(classifier.requests).toHaveLength(1);
+    expect(classifier.requests[0]?.tabs.map((tab) => tab.ref)).toEqual(['tab-4']);
+    expect(proposal.scope).toBe('active');
+    // The floor exists to stop a bulk run fragmenting a window, not to veto an explicit request.
+    expect(proposal.changes.map((change) => change.tabId)).toEqual([4]);
+    expect(proposal.skippedGroups).toEqual([]);
+  });
 
   it('sorts the windows it touched, but only when the setting asks for it', async () => {
     const createSortingHarness = (sortEnabled: boolean) => {

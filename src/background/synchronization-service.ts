@@ -37,8 +37,18 @@ export interface BrowserGroup extends ClassificationGroup {
   windowId: number;
 }
 
+/**
+ * How much of the browser a review covers.
+ *
+ * `ungrouped` is the everyday one: tabs already in a group are the settled part of a window, and
+ * sending them costs a request per five tabs while inviting the model to second-guess groups the
+ * user is happy with. `active` narrows that to the one tab in front of you. `current` and `all`
+ * remain because stored proposals from earlier runs carry them.
+ */
+export type ReviewScope = 'all' | 'current' | 'active' | 'ungrouped';
+
 export interface SynchronizationPlatform {
-  listTabs(scope: 'all' | 'current'): Promise<BrowserTab[]>;
+  listTabs(scope: ReviewScope): Promise<BrowserTab[]>;
   listGroups(windowId: number): Promise<BrowserGroup[]>;
   getTab(tabId: number): Promise<BrowserTab | null>;
   moveToExistingGroup(tabIds: number[], groupId: number): Promise<void>;
@@ -98,7 +108,7 @@ export interface FailedTab {
 
 export interface SynchronizationProposal {
   id: string;
-  scope: 'all' | 'current';
+  scope: ReviewScope;
   changes: SynchronizationChange[];
   unchangedCount: number;
   // Tabs whose chunk failed every attempt. They stay put, but silence would misreport coverage, and
@@ -288,7 +298,7 @@ export class SynchronizationService {
     return undefined;
   }
 
-  async review(scope: 'all' | 'current'): Promise<SynchronizationProposal> {
+  async review(scope: ReviewScope): Promise<SynchronizationProposal> {
     this.reviewsInFlight += 1;
     try {
       return await this.enqueueOperation(() => this.reviewOnce(scope));
@@ -309,10 +319,11 @@ export class SynchronizationService {
     return this.reviewsInFlight > 0;
   }
 
-  private async reviewOnce(scope: 'all' | 'current'): Promise<SynchronizationProposal> {
-    const allTabs = await this.platform.listTabs(scope);
+  private async reviewOnce(scope: ReviewScope): Promise<SynchronizationProposal> {
+    const allTabs = await this.platform.listTabs(scope === 'ungrouped' ? 'current' : scope);
     const unlockedTabs = await this.locks.excludeLocked(allTabs);
-    const eligible = unlockedTabs.filter((tab) => !tab.incognito && getHostname(tab.url) !== '');
+    const eligible = unlockedTabs.filter((tab) => !tab.incognito && getHostname(tab.url) !== '' &&
+      (scope !== 'ungrouped' || tab.groupId < 0));
     const presets = await this.presets.list();
 
     const windowIds = [...new Set(eligible.map((tab) => tab.windowId))];
@@ -429,7 +440,11 @@ export class SynchronizationService {
           splitViewId: tab.splitViewId ?? null,
         });
       }
-      const minimumTabs = effectiveMinTabsPerNewGroup(this.getGranularity(), tabs.length);
+      // A one-tab review is an explicit request about that tab, so the floor that stops a bulk run
+      // from fragmenting a window has nothing to guard here.
+      const minimumTabs = scope === 'active'
+        ? 1
+        : effectiveMinTabsPerNewGroup(this.getGranularity(), tabs.length);
       const { kept, dropped } = withoutUndersizedNewGroups(changes, minimumTabs);
       for (const group of dropped) {
         recordSkippedGroup(skippedGroups, group.title, group.tabCount, 'too_few_tabs', minimumTabs);
@@ -1098,7 +1113,7 @@ function parseStoredProposal(value: unknown): StoredSynchronizationProposal | nu
 
 function parseProposal(value: Record<string, unknown>): SynchronizationProposal | null {
   if (
-    typeof value.id !== 'string' || (value.scope !== 'all' && value.scope !== 'current') ||
+    typeof value.id !== 'string' || !isReviewScope(value.scope) ||
     typeof value.unchangedCount !== 'number' ||
     !Array.isArray(value.changes)
   ) {
@@ -1129,6 +1144,10 @@ function parseProposal(value: Record<string, unknown>): SynchronizationProposal 
     skippedGroups,
     planFailureReason,
   };
+}
+
+function isReviewScope(value: unknown): value is ReviewScope {
+  return value === 'all' || value === 'current' || value === 'active' || value === 'ungrouped';
 }
 
 function isFailedTab(value: unknown): value is FailedTab {
