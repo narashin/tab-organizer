@@ -434,6 +434,8 @@ export class SynchronizationService {
           unchangedCount += 1;
           continue;
         }
+        // Measured on Chrome 140: a split pair with no group is reported here and blocked, while a
+        // pair inside a tab group arrives without a split id and is treated as two ordinary tabs.
         const splitView = tab.splitViewId !== undefined && tab.splitViewId >= 0;
         changes.push({
           tabId,

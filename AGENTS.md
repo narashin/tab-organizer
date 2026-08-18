@@ -2,7 +2,7 @@
 
 ## Project scope
 
-This repository contains the T-1 through T-8 implementation of a Manifest V3 Chrome extension for AI-assisted tab organization. The active PLAN governs onboarding, presets, locks, first-page organization, reviewed synchronization, Split View safety, history/undo, and production packaging.
+This repository contains the T-1 through T-8 implementation of a Manifest V3 Chrome extension for AI-assisted tab organization. The active PLAN governs onboarding, presets, locks, first-page organization, reviewed synchronization, Split View safety, and production packaging.
 
 ## Commands
 
@@ -41,6 +41,7 @@ This repository contains the T-1 through T-8 implementation of a Manifest V3 Chr
 - Do not use emoji in product UI, code, logs, or documentation examples.
 - Keep permissions minimal. The product declares only `sidePanel`, `storage`, `tabs`, `tabGroups`, and the OpenAI API host origin. Anthropic, Google, and custom endpoints are granted at runtime through `ensureHostAccess` from a user gesture, so installing the extension never asks for them.
 - Treat `chrome.tabs.SPLIT_VIEW_ID_NONE` (`-1`) as not being in Split View.
+- The guard only holds for tabs Chrome reports as split. Measured on Chrome 140 (2026-08-18): a split pair with no group is reported and blocked, while a split pair inside a tab group comes back without a split id, so the review treats those tabs as ordinary and can separate them. Do not restate the blanket promise that a Split View tab is never moved.
 - Never include API keys in UI state, logs, error details, or Chrome Sync.
 - Update `docs/plan/` before code when requirements change and record exact verification results. These notes are untracked on purpose and stay on the machine that wrote them.
 

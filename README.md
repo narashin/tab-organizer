@@ -18,7 +18,7 @@ The groups above are real: the extension grouped those tabs through Chrome's own
 - **Organizes new tabs once.** The first real page a new tab lands on can be grouped automatically. Later navigation in that tab is left alone.
 - **Presets** teach it names it could not guess — internal project codes, product names — with optional text cues that match locally, before any request is made.
 - **Undo.** The ten most recent operations can be reversed for tabs that are still where the extension put them. Your later manual changes are preserved.
-- **Split View safety.** Tabs in Chrome Split View are shown but never moved.
+- **Split View safety.** A Split View pair that belongs to no group is shown in the review and left alone. Measured on Chrome 140: a pair *inside* a group is not recognized as split, so those two tabs can be moved into different groups and the split ends. Sorting keeps recognized pairs together.
 - **Sends very little.** Tab titles, hostnames, existing group names, and preset descriptions. Never full URLs, page content, screenshots, cookies, forms, or history. The URL path is sent only if you turn that on, and the query string never is.
 
 ## Install
@@ -30,7 +30,7 @@ There is no Chrome Web Store listing yet, so install the packaged build by hand.
 3. Click **Load unpacked** and select the unzipped folder — the one containing `manifest.json`.
 4. Pin the extension so the toolbar icon stays visible.
 
-Chrome 116 or newer is required. Split View protection turns on by itself on Chrome 140+.
+Chrome 116 or newer is required. Split View handling applies from Chrome 140 on, with the limit noted above.
 
 Updating means downloading the newer zip and pressing **Reload** on the extension card. Loading an unpacked extension makes Chrome show a "Disable developer mode extensions" warning on startup; that is Chrome talking about the install method, not about this extension.
 
