@@ -17,31 +17,32 @@ class MemoryStorage implements LocalStorageArea {
 const grouped = (tabId: number, hostname: string) => ({ tabId, groupId: 7, hostname });
 
 describe('TabPlacementStore', () => {
-  it('reports a grouped tab whose host has changed since it was grouped', async () => {
+  it('reports a grouped tab whose host has changed since it was examined', async () => {
     const store = new TabPlacementStore(new MemoryStorage());
     await store.record([{ tabId: 1, hostname: 'atlas.test' }, { tabId: 2, hostname: 'docs.test' }]);
 
-    const drifted = await store.driftedTabIds([
+    const unsettled = await store.unsettledTabIds([
       grouped(1, 'sandy.test'),
       grouped(2, 'docs.test'),
     ]);
 
-    // Tab 1 was grouped as a ATLAS page and now shows something else, so it is not settled.
-    expect(drifted).toEqual([1]);
+    // Tab 1 was examined as a ATLAS page and now shows something else, so it is not settled.
+    expect(unsettled).toEqual([1]);
   });
 
-  it('says nothing about tabs it never placed', async () => {
+  it('reports a grouped tab it has never examined, rather than assuming it is settled', async () => {
     const store = new TabPlacementStore(new MemoryStorage());
 
-    // Treating an unknown tab as drifted would drag every pre-existing group into a cheap review.
-    expect(await store.driftedTabIds([grouped(9, 'anything.test')])).toEqual([]);
+    // Recording its current host on sight was the earlier answer, and it wrote down a tab that had
+    // already drifted as though that were where it started.
+    expect(await store.unsettledTabIds([grouped(9, 'unseen.test')])).toEqual([9]);
   });
 
   it('ignores a tab that has left its group, since the review already covers it', async () => {
     const store = new TabPlacementStore(new MemoryStorage());
     await store.record([{ tabId: 1, hostname: 'atlas.test' }]);
 
-    expect(await store.driftedTabIds([{ tabId: 1, groupId: -1, hostname: 'sandy.test' }])).toEqual([]);
+    expect(await store.unsettledTabIds([{ tabId: 1, groupId: -1, hostname: 'sandy.test' }])).toEqual([]);
   });
 
   it('replaces an earlier record for the same tab', async () => {
@@ -50,7 +51,7 @@ describe('TabPlacementStore', () => {
     await store.record([{ tabId: 1, hostname: 'sandy.test' }]);
 
     expect(await store.list()).toEqual([{ tabId: 1, hostname: 'sandy.test' }]);
-    expect(await store.driftedTabIds([grouped(1, 'sandy.test')])).toEqual([]);
+    expect(await store.unsettledTabIds([grouped(1, 'sandy.test')])).toEqual([]);
   });
 
   it('forgets a tab that was closed', async () => {

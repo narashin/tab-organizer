@@ -82,7 +82,6 @@ describe('PresetStore', () => {
 
   it.each([
     { draft: { ...validDraft, name: '  ' }, code: 'name_required' },
-    { draft: { ...validDraft, description: '' }, code: 'description_required' },
     { draft: { ...validDraft, color: 'black' }, code: 'invalid_color' },
   ])('rejects invalid preset data with $code', async ({ draft, code }) => {
     const store = new PresetStore(new MemoryStorage(), () => 'preset-1');
@@ -117,5 +116,18 @@ describe('PresetStore', () => {
     const ordered = await store.reorder(['preset-2', 'preset-2', 'missing', 'preset-1']);
 
     expect(ordered.map((preset) => preset.name)).toEqual(['Zulu', 'Alfa']);
+  });
+
+  it('stores a preset with no description, since a cue can carry it alone', async () => {
+    const store = new PresetStore(new MemoryStorage(), () => 'preset-1');
+
+    const preset = await store.create({
+      name: 'SANDY', description: '   ', cues: ['sandy'], color: 'orange',
+    });
+
+    // The description is context for the model; a cue never reaches it, so prose is not required.
+    expect(preset).toEqual({
+      id: 'preset-1', name: 'SANDY', description: '', cues: ['sandy'], color: 'orange',
+    });
   });
 });

@@ -1010,6 +1010,44 @@ describe('SynchronizationService', () => {
     return service.review('all');
   };
 
+  it('looks at every group once a session, then only at what moved since', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const windowTabs: BrowserTab[] = [
+      { tabId: 1, windowId: 8, title: 'Stays put', url: 'https://atlas.test/a', groupId: 5, incognito: false },
+      { tabId: 2, windowId: 8, title: 'Moves on', url: 'https://atlas.test/b', groupId: 5, incognito: false },
+    ];
+    const classifier = new RecordingClassifier();
+    const platform: SynchronizationPlatform = {
+      listTabs: async () => windowTabs,
+      listGroups: async () => [
+        { groupId: 5, windowId: 8, ref: 'group-5', title: 'ATLAS', color: 'blue' },
+      ],
+      getTab: async (tabId) => windowTabs.find((tab) => tab.tabId === tabId) ?? null,
+      moveToExistingGroup: async () => undefined,
+      moveToNewGroup: async () => 1,
+    };
+    const service = new SynchronizationService(
+      classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
+      platform, () => 'en', () => 'session', session, undefined, undefined, undefined,
+      () => false, undefined, new TabPlacementStore(session),
+    );
+
+    await service.review('ungrouped');
+    // A group that predates this extension has to be examined once; nothing recorded it before.
+    expect(classifier.requests[0]?.tabs.map((tab) => tab.title)).toEqual(['Stays put', 'Moves on']);
+
+    await service.review('ungrouped');
+    // Both were examined and neither moved, so the second run has nothing to ask about.
+    expect(classifier.requests).toHaveLength(1);
+
+    const moved = windowTabs[1];
+    if (moved !== undefined) moved.url = 'https://sandy.test/x';
+    await service.review('ungrouped');
+
+    expect(classifier.requests[1]?.tabs.map((tab) => tab.title)).toEqual(['Moves on']);
+  });
+
   it('takes a grouped tab back into the review once it has navigated elsewhere', async () => {
     const local = new MemoryStorage();
     const session = new MemoryStorage();
@@ -1042,6 +1080,36 @@ describe('SynchronizationService', () => {
     await service.review('ungrouped');
 
     expect(classifier.requests[0]?.tabs.map((tab) => tab.title)).toEqual(['Moved on']);
+  });
+
+  it('records the grouped tabs a review looked at, whatever the user does with the proposal', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const windowTabs: BrowserTab[] = [
+      { tabId: 1, windowId: 8, title: 'Grouped', url: 'https://atlas.test/x', groupId: 5, incognito: false },
+      { tabId: 2, windowId: 8, title: 'Loose', url: 'https://c.test/x', groupId: -1, incognito: false },
+    ];
+    const platform: SynchronizationPlatform = {
+      listTabs: async () => windowTabs,
+      listGroups: async () => [
+        { groupId: 5, windowId: 8, ref: 'group-5', title: 'Settled', color: 'blue' },
+      ],
+      getTab: async (tabId) => windowTabs.find((tab) => tab.tabId === tabId) ?? null,
+      moveToExistingGroup: async () => undefined,
+      moveToNewGroup: async () => 1,
+    };
+    const placements = new TabPlacementStore(session);
+    const service = new SynchronizationService(
+      new RecordingClassifier(), new PresetStore(local, () => 'preset'),
+      new TabLockStore(session, () => 1), platform, () => 'en', () => 'seeded', session,
+      undefined, undefined, undefined, () => false, undefined, placements,
+    );
+
+    await service.review('ungrouped');
+
+    // Groups made before this extension ran are the ones that most need watching, and nothing was
+    // recorded for them until now.
+    expect(await placements.list()).toEqual([{ tabId: 1, hostname: 'atlas.test' }]);
   });
 
   it('records where each tab was pointed when it was grouped', async () => {

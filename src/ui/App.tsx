@@ -238,6 +238,13 @@ export function App({
   useEffect(() => {
     document.documentElement.lang = locale;
   }, [locale]);
+  // A result belongs to the section that produced it. Carrying "applied 2 changes" into Presets read
+  // as something the preset form had just done.
+  useEffect(() => {
+    setNotice(null);
+    setFailureReason(null);
+    setApplyResult(null);
+  }, [section]);
   const selectedCount = proposal?.changes.filter((change) => change.selected && change.blockedReason === null).length ?? 0;
   // Locking a tab that a pending review wants to move is a contradiction the apply path resolves in
   // favour of the lock. The review list says so rather than letting the row be selected again.
@@ -410,15 +417,23 @@ export function App({
     }
   };
 
+  const editingPreset = (organization?.presets ?? []).find((preset) => preset.id === editingPresetId);
+  const draftCues = cuesText.split(',').map((cue) => cue.trim()).filter((cue) => cue.length > 0);
+  // The same rule the store enforces, so the button cannot offer a submission that would be refused.
+  const presetDraftComplete = presetDraft.name.trim().length > 0;
+  // Editing without changing anything is a request to store what is already stored.
+  const presetDraftChanged = editingPreset === undefined ||
+    editingPreset.name !== presetDraft.name.trim() ||
+    editingPreset.description !== presetDraft.description.trim() ||
+    editingPreset.color !== presetDraft.color ||
+    editingPreset.cues.join('\u0000') !== draftCues.join('\u0000');
+
   const handlePresetSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (organizationClient === undefined || isPresetSubmitting) return;
-    const nextErrors = {
-      name: presetDraft.name.trim().length === 0,
-      description: presetDraft.description.trim().length === 0,
-    };
-    setPresetErrors(nextErrors);
-    if (nextErrors.name || nextErrors.description) return;
+    const nameMissing = presetDraft.name.trim().length === 0;
+    setPresetErrors({ name: nameMissing, description: false });
+    if (nameMissing) return;
     setIsPresetSubmitting(true);
     try {
       await run(async () => {
@@ -547,7 +562,7 @@ export function App({
                 disabled={!settings.organizationEnabled || isReviewing || isApplying}
                 onClick={() => void handleReview('ungrouped')}
               >
-                {text.syncUngrouped}
+                {text.syncNeeded}
               </button>
               {isReviewing ? (
                 <div className="banner banner--info progress" role="status" aria-label={text.reviewingTabs}>
@@ -587,8 +602,12 @@ export function App({
                 <>
                   {/* A proposal outlives the popup, so a restored list has to say which run made
                       it. Without this an all-windows review reads as a current-window one. */}
+                  {/* The tab count separates "there was nothing to look at" from "everything was
+                      already where it belongs", which the unchanged count alone cannot. */}
                   <p className="banner banner--info">
                     {text.reviewScopeLabel}: {reviewScopeText(text, proposal.scope)}
+                    {' · '}{text.reviewedTabs}: {proposal.changes.length + proposal.unchangedCount +
+                      proposal.failedTabs.length}
                     {' · '}{text.unchangedCount}: {proposal.unchangedCount}
                   </p>
                   {/* Named rather than counted: these tabs were never classified, so the only way
@@ -804,6 +823,12 @@ export function App({
                     );
                   })}
 
+                  {/* A run that proposes nothing used to end on "operation completed" and an empty
+                      list, which reads as the button having done nothing at all. */}
+                  {proposal.changes.length === 0 ? (
+                    <p className="empty">{text.reviewNoChanges}</p>
+                  ) : null}
+
                   <div className="sticky-cta">
                     <p className="field__note">{text.selectedCount}: {selectedCount}</p>
                     <button
@@ -884,19 +909,15 @@ export function App({
                   {text.presetDescription}
                   <input
                     value={presetDraft.description}
-                    aria-invalid={presetErrors.description}
-                    aria-describedby={presetErrors.description ? 'preset-description-error' : undefined}
+                    aria-describedby="preset-description-note"
                     onChange={(event) => {
                       setPresetDraft({ ...presetDraft, description: event.currentTarget.value });
-                      if (presetErrors.description) setPresetErrors({ ...presetErrors, description: false });
                     }}
                   />
                 </label>
-                {presetErrors.description ? (
-                  <p className="field__error" id="preset-description-error" role="alert">
-                    {text.presetDescriptionRequired}
-                  </p>
-                ) : null}
+                {/* Optional, and the note says what leaving it out costs: the description is the only
+                    context the model gets for a preset, while a cue never reaches it. */}
+                <p id="preset-description-note" className="field__note">{text.presetDescriptionNote}</p>
 
                 <label className="field__label">
                   {text.presetCues}
@@ -924,7 +945,11 @@ export function App({
                   </div>
                 </fieldset>
 
-                <button type="submit" className="btn btn--primary btn--block" disabled={isPresetSubmitting}>
+                <button
+                  type="submit"
+                  className="btn btn--primary btn--block"
+                  disabled={isPresetSubmitting || !presetDraftComplete || !presetDraftChanged}
+                >
                   {editingPresetId === null ? text.createPreset : text.updatePreset}
                 </button>
               </form>

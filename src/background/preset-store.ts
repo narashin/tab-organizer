@@ -121,14 +121,19 @@ function isGroupColor(value: unknown): value is GroupColor {
   return typeof value === 'string' && GROUP_COLORS.includes(value as GroupColor);
 }
 
+/**
+ * Normalizes a draft, requiring only a name.
+ *
+ * The description used to be required because it was the only context the model received for a
+ * preset. Text cues changed that: a cue is matched locally and never reaches the model at all, and a
+ * preset can exist purely to place a group in a chosen order. Demanding prose for those was asking
+ * for something nobody reads.
+ */
 function validateDraft(draft: PresetDraft): PresetDraft {
   const name = draft.name.trim();
   const description = draft.description.trim();
   if (name.length === 0) {
     throw new PresetValidationError('name_required');
-  }
-  if (description.length === 0) {
-    throw new PresetValidationError('description_required');
   }
   if (!isGroupColor(draft.color)) {
     throw new PresetValidationError('invalid_color');

@@ -348,8 +348,8 @@ describe('App organization flows', () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
     const workSummary = screen.getByText(/Work \(/);
     await user.click(workSummary);
 
@@ -371,8 +371,8 @@ describe('App organization flows', () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
     const workSummary = screen.getByText(/Work \(/);
     await user.click(workSummary);
     const workDetails = workSummary.closest('details');
@@ -390,8 +390,8 @@ describe('App organization flows', () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
 
     const blockedMessage = await screen.findByText(/Split View: keep unchanged/);
     expect(blockedMessage).not.toBeVisible();
@@ -407,8 +407,8 @@ describe('App organization flows', () => {
     const user = userEvent.setup();
     const organization = new PartialSelectionOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
     await user.click(screen.getByText(/Work \(/));
 
     await user.click(screen.getByRole('checkbox', { name: /Normal/ }));
@@ -424,18 +424,34 @@ describe('App organization flows', () => {
     const organization = new MemoryOrganizationClient();
     organization.applyResult = { applied: 2, skipped: 1, sortOutcome: null };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
     await user.click(screen.getByRole('button', { name: 'Apply selected (1)' }));
 
     expect(await screen.findByText('Applied changes: 2 · Skipped changes: 1')).toBeVisible();
+  });
+
+  it('explains a review that proposed nothing, instead of a bare success notice', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    const pending = await organization.review();
+    // What a window whose tabs are all settled comes back with.
+    organization.review = async () => ({ ...pending, changes: [], unchangedCount: 3 });
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
+
+    expect(await screen.findByText(/Nothing to propose/)).toBeVisible();
+    // Three tabs looked at and three unchanged is a different story from nothing to look at.
+    expect(screen.getByText(/Tabs looked at: 3/)).toBeVisible();
   });
 
   it('reviews only the active tab when asked, and says so in the scope line', async () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
 
     await user.click(screen.getByRole('button', { name: 'Sync this tab' }));
 
@@ -461,7 +477,7 @@ describe('App organization flows', () => {
     };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
 
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
 
     expect(await screen.findByText(/Reviewed: every window/)).toBeVisible();
     // The window numbers only make sense once the scope is stated.
@@ -482,7 +498,7 @@ describe('App organization flows', () => {
     };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
 
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
     await user.click(await screen.findByText(/Groups left uncreated \(2\)/));
 
     expect(screen.getByText('ForgeHub · needs 4 tabs, has 3')).toBeVisible();
@@ -499,8 +515,8 @@ describe('App organization flows', () => {
     organization.review = () => new Promise<SynchronizationProposal>((resolve) => { release = resolve; });
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
 
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(await screen.findByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync tabs that need it' }));
 
     const progress = await screen.findByRole('status', { name: 'Reviewing tabs' });
     expect(within(progress).getByText(/runs in the background/)).toBeVisible();
@@ -522,7 +538,7 @@ describe('App organization flows', () => {
     organization.review = async () => { reviews += 1; return finished; };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
 
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
 
     expect(await screen.findByRole('status', { name: 'Reviewing tabs' })).toBeVisible();
     // Watching a run is not starting one.
@@ -538,8 +554,8 @@ describe('App organization flows', () => {
   it('selects and deselects a whole group at once, leaving other groups alone', async () => {
     const user = userEvent.setup();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={new GroupProposalOrganizationClient()} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
     await user.click(await screen.findByText(/Work \(2\)/));
 
     expect(screen.getByRole('button', { name: 'Apply selected (2)' })).toBeEnabled();
@@ -567,7 +583,7 @@ describe('App organization flows', () => {
     };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
 
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
     await user.click(await screen.findByText('Tabs that could not be reviewed (2)'));
 
     expect(screen.getByText('Quarterly report')).toBeVisible();
@@ -582,7 +598,7 @@ describe('App organization flows', () => {
     organization.pendingProposal = { ...pending, planFailureReason: 'taxonomy_invalid_response' };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
 
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
 
     expect(await screen.findByText(/Reason: taxonomy_invalid_response/)).toBeVisible();
   });
@@ -596,7 +612,7 @@ describe('App organization flows', () => {
     organization.review = async () => { reviews += 1; return pending; };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
 
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
 
     expect(await screen.findByText(/Work \(/)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Apply selected (1)' })).toBeEnabled();
@@ -608,7 +624,7 @@ describe('App organization flows', () => {
     const organization = new MemoryOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
 
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
 
     expect(screen.getByText('Run a synchronization to review proposed changes.')).toBeVisible();
   });
@@ -627,7 +643,7 @@ describe('App organization flows', () => {
     resolveState?.(organization.state);
   });
 
-  it('keeps a settings operation notice when organization loading completes', async () => {
+  it('keeps a settings notice when a late organization response arrives', async () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
     let resolveState: ((state: OrganizationState) => void) | undefined;
@@ -643,9 +659,11 @@ describe('App organization flows', () => {
     }));
     expect(screen.getByText('Operation completed.')).toBeVisible();
 
+    // A state response that lands afterwards must not wipe the notice. Leaving the section does,
+    // which is a different rule and is covered on its own.
     resolveState?.(organization.state);
-    await user.click(screen.getByRole('button', { name: 'Presets' }));
-    expect(await screen.findByText('No presets yet.')).toBeVisible();
+    await screen.findByRole('heading', { name: 'Connect OpenAI' });
+
     expect(screen.getByText('Operation completed.')).toBeVisible();
   });
 
@@ -660,8 +678,8 @@ describe('App organization flows', () => {
       return new Promise<SynchronizationProposal>((resolve) => { resolveReview = resolve; });
     };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    const syncCurrent = screen.getByRole('button', { name: 'Sync ungrouped tabs' });
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    const syncCurrent = screen.getByRole('button', { name: 'Sync tabs that need it' });
 
     await user.click(syncCurrent);
     expect(syncCurrent).toBeDisabled();
@@ -673,15 +691,15 @@ describe('App organization flows', () => {
 
     resolveReview?.(proposal);
     // The same banner now states the scope the proposal came from.
-    expect(await screen.findByText(/Reviewed: this window · Unchanged tabs: 2/)).toBeVisible();
+    expect(await screen.findByText(/Reviewed: this window/)).toBeVisible();
   });
 
   it('locks a specific review row without activating the tab', async () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
     await user.click(screen.getByText(/Work \(/));
 
     await user.click(screen.getByRole('button', { name: 'Lock Normal' }));
@@ -697,8 +715,8 @@ describe('App organization flows', () => {
   it('rejects every eligible change in a proposed group at once', async () => {
     const user = userEvent.setup();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={new GroupProposalOrganizationClient()} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
 
     expect(screen.getByText('Selected changes: 2')).toBeVisible();
     await user.click(screen.getByRole('button', { name: 'Deselect all in Work' }));
@@ -721,8 +739,8 @@ describe('App organization flows', () => {
       ],
     });
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
 
     expect(await screen.findByText('Work · Window 1 (1)')).toBeVisible();
     expect(screen.getByText('Docs · Window 2 (1)')).toBeVisible();
@@ -732,8 +750,8 @@ describe('App organization flows', () => {
   it('shows both sides and targets in one Split View conflict', async () => {
     const user = userEvent.setup();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={new ConflictOrganizationClient()} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
 
     const summary = screen.getByText('Split View conflict (2)');
     await user.click(summary);
@@ -754,8 +772,8 @@ describe('App organization flows', () => {
       return new Promise((resolve) => { resolveApply = resolve; });
     };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
     const apply = screen.getByRole('button', { name: 'Apply selected (1)' });
 
     await user.click(apply);
@@ -772,32 +790,75 @@ describe('App organization flows', () => {
     let resolveApply: ((value: ApplyResult) => void) | undefined;
     organization.apply = async () => new Promise((resolve) => { resolveApply = resolve; });
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
     await user.click(screen.getByText(/Work \(/));
 
     await user.click(screen.getByRole('button', { name: 'Apply selected (1)' }));
 
-    expect(screen.getByRole('button', { name: 'Sync ungrouped tabs' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Sync ungrouped tabs' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Sync tabs that need it' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Sync tabs that need it' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Deselect all in Work' })).toBeDisabled();
     expect(screen.getByRole('checkbox', { name: /Normal/ })).toBeDisabled();
     resolveApply?.({ applied: 1, skipped: 0, sortOutcome: null });
     expect(await screen.findByText('Applied changes: 1 · Skipped changes: 0')).toBeVisible();
   });
 
-  it('shows localized inline validation for whitespace-only preset fields', async () => {
+  it('keeps the preset submit closed until the draft could actually be stored', async () => {
     const user = userEvent.setup();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={new MemoryOrganizationClient()} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Presets' }));
+
+    const submit = screen.getByRole('button', { name: 'Create preset' });
+    expect(submit).toBeDisabled();
+
+    // Whitespace is not a name, and the store would refuse it, so the button stays shut.
     await user.type(screen.getByLabelText('Name'), '   ');
     await user.type(screen.getByLabelText('Description'), '   ');
+    expect(submit).toBeDisabled();
 
-    await user.click(screen.getByRole('button', { name: 'Create preset' }));
+    await user.clear(screen.getByLabelText('Name'));
+    await user.type(screen.getByLabelText('Name'), 'Apollo');
 
-    expect(screen.getByText('Enter a preset name.')).toBeVisible();
-    expect(screen.getByText('Enter a preset description.')).toBeVisible();
-    expect(screen.getByLabelText('Name')).toHaveAttribute('aria-invalid', 'true');
+    // A name is all the store requires: the description is optional context for the model.
+    expect(submit).toBeEnabled();
+    expect(screen.getByText(/Optional\. It is the only description the model reads/)).toBeVisible();
+  });
+
+  it('opens the update button only once the draft differs from the stored preset', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    organization.state = {
+      ...organization.state,
+      presets: [{ id: 'preset-1', name: 'Apollo', description: 'Billing', cues: ['apollo'], color: 'blue' }],
+    };
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Presets' }));
+    await user.click(screen.getByRole('button', { name: 'Edit' }));
+
+    // Storing what is already stored is not an edit.
+    expect(screen.getByRole('button', { name: 'Update preset' })).toBeDisabled();
+
+    await user.type(screen.getByLabelText('Description'), ' platform');
+
+    expect(screen.getByRole('button', { name: 'Update preset' })).toBeEnabled();
+  });
+
+  it('forgets a result when the user moves to another section', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
+    await screen.findByText(/Work \(/);
+    await user.click(screen.getByRole('button', { name: 'Apply selected (1)' }));
+    expect(await screen.findByText('Applied changes: 1 · Skipped changes: 0')).toBeVisible();
+
+    await user.click(screen.getByRole('button', { name: 'Presets' }));
+
+    // The count belonged to the sync, and reading it above the preset form suggested otherwise.
+    expect(screen.queryByText(/Applied changes/)).toBeNull();
+    expect(screen.queryByText('Operation completed.')).toBeNull();
   });
 
   it('shows recognizable titles and hostnames for locked and failed tabs', async () => {
@@ -818,7 +879,7 @@ describe('App organization flows', () => {
     expect(screen.getByText('Locked work')).toBeVisible();
     expect(screen.getByText('locked.test')).toBeVisible();
 
-    await user.click(screen.getByRole('button', { name: 'Review' }));
+    await user.click(screen.getByRole('button', { name: 'Sync' }));
     await user.click(screen.getByRole('button', { name: /Retry Failed work.*failed\.test/ }));
     expect(organization.retriedIds).toEqual([2]);
     expect(screen.queryByRole('heading', { name: 'Failed automatic organization' })).not.toBeInTheDocument();
@@ -939,8 +1000,8 @@ describe('App organization flows', () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
     await screen.findByText(/Work \(/);
     // The tabs have moved by the time this runs, so a failure here is not the apply failing.
     organization.getState = async () => { throw new Error('storage_unavailable'); };
@@ -956,9 +1017,9 @@ describe('App organization flows', () => {
     const organization = new MemoryOrganizationClient();
     organization.review = async () => { throw new Error('classification_request_timeout'); };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
 
-    await user.click(screen.getByRole('button', { name: 'Sync ungrouped tabs' }));
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
 
     // A review of a handful of tabs is one request, so its failure is the whole review's failure.
     expect(await screen.findByText(/classification_request_timeout/)).toBeVisible();

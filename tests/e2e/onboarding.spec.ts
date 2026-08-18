@@ -94,7 +94,7 @@ test('loads the extension and completes localized BYOK onboarding', async () => 
     await expect(page.locator('body')).not.toContainText('sk-project-e2e-sensitive');
 
     await page.getByLabel('언어').selectOption('en');
-    await page.getByRole('button', { name: 'Review' }).focus();
+    await page.getByRole('button', { name: 'Sync', exact: true }).focus();
     await page.keyboard.press('Tab');
     await expect(page.getByRole('button', { name: 'Presets' })).toBeFocused();
     await page.getByRole('button', { name: 'Presets' }).click();
@@ -116,9 +116,9 @@ test('loads the extension and completes localized BYOK onboarding', async () => 
       session: await chrome.storage.session.get(null),
     }));
     expect(browserState.tabs.some((tab) => tab.url?.startsWith('https://work.example.test/'))).toBe(true);
-    await page.getByRole('button', { name: 'Review' }).click();
+    await page.getByRole('button', { name: 'Sync', exact: true }).click();
     const synchronizationRequestStart = classificationInputs.length;
-    await page.getByRole('button', { name: 'Sync ungrouped tabs' }).click();
+    await page.getByRole('button', { name: 'Sync tabs that need it' }).click();
     await expect.poll(() => classificationInputs
       .slice(synchronizationRequestStart)
       .some((input) => input.mode === 'synchronization')).toBe(true);

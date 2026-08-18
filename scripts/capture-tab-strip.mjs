@@ -64,8 +64,8 @@ try {
     if (page.url() === 'about:blank') await page.close();
   }
   await popup.bringToFront();
-  await popup.getByRole('button', { name: 'Review' }).click();
-  await popup.getByRole('button', { name: 'Sync ungrouped tabs' }).click();
+  await popup.getByRole('button', { name: 'Sync', exact: true }).click();
+  await popup.getByRole('button', { name: 'Sync tabs that need it' }).click();
   await popup.locator('summary').first().waitFor();
   await popup.getByRole('button', { name: /Apply selected/ }).click();
   await popup.waitForTimeout(1500);

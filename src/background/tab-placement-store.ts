@@ -9,12 +9,13 @@ export interface TabPlacement {
 const PLACEMENTS_KEY = 'tabPlacements';
 
 /**
- * Remembers where a tab was pointed when it was grouped, so a later navigation can be noticed.
+ * Remembers which grouped tabs have already been examined, and where they pointed at the time.
  *
  * The everyday review only looks at tabs with no group, on the grounds that a grouped tab is
  * settled. A tab that was grouped as a ATLAS page and now shows a SANDY page is not settled, and
  * without this it would keep its old group until someone noticed by hand. Session-scoped: a record
- * is only useful while the tab it describes still exists.
+ * is only useful while the tab it describes still exists, and a new browser session earns a fresh
+ * look at every group.
  */
 export class TabPlacementStore {
   private storageMutation: Promise<void> = Promise.resolve();
@@ -38,12 +39,18 @@ export class TabPlacementStore {
   }
 
   /**
-   * The grouped tabs whose host no longer matches the one they were grouped for.
+   * The grouped tabs worth asking about again.
    *
-   * A tab with no record is not reported: this only knows about placements it made, and treating
-   * silence as drift would drag every pre-existing group into a review that is meant to be cheap.
+   * Two cases, and they have to be treated alike. A tab whose recorded host no longer matches has
+   * plainly moved on. A tab with no record at all is not settled either, it is merely unexamined:
+   * the group may predate this extension entirely. Recording the current host on sight looked
+   * cheaper and was wrong, because a tab that had already drifted got its new host written down as
+   * if that were where it started, and it was never asked about again.
+   *
+   * So the first review of a session looks at every grouped tab once, and later ones only at the
+   * tabs that have moved since.
    */
-  async driftedTabIds(
+  async unsettledTabIds(
     tabs: readonly { tabId: number; groupId: number; hostname: string }[],
   ): Promise<number[]> {
     const placements = new Map((await this.list()).map((placement) => [
@@ -51,11 +58,8 @@ export class TabPlacementStore {
       placement.hostname,
     ]));
     return tabs
-      .filter((tab) => {
-        if (tab.groupId < 0 || tab.hostname === '') return false;
-        const placed = placements.get(tab.tabId);
-        return placed !== undefined && placed !== tab.hostname;
-      })
+      .filter((tab) => tab.groupId >= 0 && tab.hostname !== '' &&
+        placements.get(tab.tabId) !== tab.hostname)
       .map((tab) => tab.tabId);
   }
 

@@ -324,15 +324,16 @@ export class SynchronizationService {
   private async reviewOnce(scope: ReviewScope): Promise<SynchronizationProposal> {
     const allTabs = await this.platform.listTabs(scope === 'ungrouped' ? 'current' : scope);
     const unlockedTabs = await this.locks.excludeLocked(allTabs);
-    // A grouped tab that has since navigated somewhere else is no longer settled, so the everyday
-    // review takes it back even though it has a group.
-    const drifted = scope === 'ungrouped' && this.placements !== undefined
-      ? new Set(await this.placements.driftedTabIds(unlockedTabs.map((tab) => ({
-        tabId: tab.tabId, groupId: tab.groupId, hostname: getHostname(tab.url),
-      }))))
+    // A grouped tab is only settled once it has been examined and has stayed put since. The first
+    // review of a session therefore looks at every group; later ones only at what has moved.
+    const inspected = unlockedTabs.map((tab) => ({
+      tabId: tab.tabId, groupId: tab.groupId, hostname: getHostname(tab.url),
+    }));
+    const unsettled = scope === 'ungrouped' && this.placements !== undefined
+      ? new Set(await this.placements.unsettledTabIds(inspected))
       : new Set<number>();
     const eligible = unlockedTabs.filter((tab) => !tab.incognito && getHostname(tab.url) !== '' &&
-      (scope !== 'ungrouped' || tab.groupId < 0 || drifted.has(tab.tabId)));
+      (scope !== 'ungrouped' || tab.groupId < 0 || unsettled.has(tab.tabId)));
     const presets = await this.presets.list();
 
     const windowIds = [...new Set(eligible.map((tab) => tab.windowId))];
@@ -476,6 +477,12 @@ export class SynchronizationService {
     const skippedGroups = mergeSkippedGroups(
       windowResults.flatMap((result) => result.skippedGroups),
     );
+
+    // Everything grouped that this run looked at counts as examined now, whatever the user does with
+    // the proposal: asking again on the next run would make the review expensive forever.
+    await this.placements?.record(inspected
+      .filter((tab) => tab.groupId >= 0 && tab.hostname !== '')
+      .map((tab) => ({ tabId: tab.tabId, hostname: tab.hostname })));
 
     markSplitViewConflicts(changes);
     const proposal: SynchronizationProposal = {
