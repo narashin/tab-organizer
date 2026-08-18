@@ -39,16 +39,22 @@ const englishCatalog = {
   syncCurrent: 'Sync current window',
   reviewTitle: 'Review tab changes',
   reviewingTabs: 'Reviewing tabs',
+  reviewingNotice: 'This runs in the background. Keep using other tabs and windows, and close this popup if you like: the result waits here.',
   reviewEmpty: 'Run a synchronization to review proposed changes.',
   unchangedCount: 'Unchanged tabs',
   failedTabCount: 'Tabs that could not be reviewed',
+  planFailed: 'The grouping plan failed, so each batch of tabs was named on its own. Groups come out fragmented. Reason',
+  skippedGroupsTitle: 'Groups left uncreated',
+  skippedNotInPlan: 'not one of the names planned for this window',
+  skippedTooFewTabs: 'needs {minimum} tabs, has {count}',
   applySelected: 'Apply selected',
   selectedCount: 'Selected changes',
   splitViewBlocked: 'Split View: keep unchanged and exit Split View in Chrome before refreshing.',
   splitViewConflict: 'Split View conflict',
   proposedTarget: 'Proposed target',
   keepUnchanged: 'Keep unchanged',
-  rejectGroup: 'Reject group',
+  selectAll: 'Select all in {group}',
+  deselectAll: 'Deselect all in {group}',
   lockTab: 'Lock',
   lockCurrent: 'Lock current tab',
   failedAutomatic: 'Failed automatic organization',
@@ -74,6 +80,7 @@ const englishCatalog = {
   historyTitle: 'Organization history',
   undo: 'Undo',
   undone: 'Undone',
+  undoLatestOnly: 'Only the most recent organization can be undone.',
   noHistory: 'No organization history.',
   modelLabel: 'Classification model',
   saveModel: 'Save model',
@@ -166,8 +173,13 @@ export const translations: Record<SupportedLocale, TranslationCatalog> = {
     syncCurrent: '현재 창 동기화',
     reviewTitle: '탭 변경 검토',
     reviewingTabs: '탭 검토 중',
+    reviewingNotice: '백그라운드에서 실행됩니다. 다른 탭과 창을 계속 사용해도 되고, 이 팝업을 닫아도 결과는 여기 남습니다.',
     reviewEmpty: '동기화를 실행해 변경 제안을 검토하세요.',
     unchangedCount: '변경 없는 탭',
+    planFailed: '그룹 계획 단계가 실패해 탭 묶음마다 따로 이름을 정했습니다. 그룹이 잘게 쪼개집니다. 사유',
+    skippedGroupsTitle: '만들지 않은 그룹',
+    skippedNotInPlan: '이 창에 계획된 이름이 아님',
+    skippedTooFewTabs: '탭 {minimum}개 필요, 현재 {count}개',
     failedTabCount: '검토하지 못한 탭',
     applySelected: '선택 항목 적용',
     selectedCount: '선택된 변경',
@@ -175,7 +187,8 @@ export const translations: Record<SupportedLocale, TranslationCatalog> = {
     splitViewConflict: '분할 화면 충돌',
     proposedTarget: '제안 대상',
     keepUnchanged: '변경하지 않기',
-    rejectGroup: '그룹 거절',
+    selectAll: '{group} 전체 선택',
+    deselectAll: '{group} 전체 해제',
     lockTab: '잠금',
     lockCurrent: '현재 탭 잠금',
     failedAutomatic: '자동 정리 실패',
@@ -201,6 +214,7 @@ export const translations: Record<SupportedLocale, TranslationCatalog> = {
     historyTitle: '정리 기록',
     undo: '실행 취소',
     undone: '취소됨',
+    undoLatestOnly: '가장 최근 정리부터 되돌릴 수 있습니다.',
     noHistory: '정리 기록이 없습니다.',
     modelLabel: '분류 모델',
     saveModel: '모델 저장',
@@ -288,8 +302,13 @@ export const translations: Record<SupportedLocale, TranslationCatalog> = {
     syncCurrent: '現在のウィンドウを同期',
     reviewTitle: 'タブ変更をレビュー',
     reviewingTabs: 'タブをレビュー中',
+    reviewingNotice: 'バックグラウンドで実行されます。他のタブやウィンドウを使い続けても、このポップアップを閉じても、結果はここに残ります。',
     reviewEmpty: '同期を実行して変更案を確認してください。',
     unchangedCount: '変更なしのタブ',
+    planFailed: 'グループ計画が失敗し、タブのまとまりごとに個別に名前を決めました。グループが細かく分かれます。理由',
+    skippedGroupsTitle: '作成しなかったグループ',
+    skippedNotInPlan: 'このウィンドウの計画名に含まれない',
+    skippedTooFewTabs: 'タブ{minimum}個必要、現在{count}個',
     failedTabCount: 'レビューできなかったタブ',
     applySelected: '選択項目を適用',
     selectedCount: '選択した変更',
@@ -297,7 +316,8 @@ export const translations: Record<SupportedLocale, TranslationCatalog> = {
     splitViewConflict: '分割表示の競合',
     proposedTarget: '提案先',
     keepUnchanged: '変更しない',
-    rejectGroup: 'グループを却下',
+    selectAll: '{group} をすべて選択',
+    deselectAll: '{group} の選択をすべて解除',
     lockTab: 'ロック',
     lockCurrent: '現在のタブをロック',
     failedAutomatic: '自動整理の失敗',
@@ -323,6 +343,7 @@ export const translations: Record<SupportedLocale, TranslationCatalog> = {
     historyTitle: '整理履歴',
     undo: '元に戻す',
     undone: '取り消し済み',
+    undoLatestOnly: '直近の整理から順に元に戻せます。',
     noHistory: '整理履歴はありません。',
     modelLabel: '分類モデル',
     saveModel: 'モデルを保存',
@@ -381,7 +402,18 @@ export const translations: Record<SupportedLocale, TranslationCatalog> = {
  * fixed name would be wrong for two of the three providers.
  */
 export function withProviderName(template: string, providerName: string): string {
-  return template.replaceAll('{provider}', providerName);
+  return fillPlaceholders(template, { provider: providerName });
+}
+
+/** Replaces every `{name}` in a catalog string, so word order stays with the translation. */
+export function fillPlaceholders(
+  template: string,
+  values: Record<string, string | number>,
+): string {
+  return Object.entries(values).reduce(
+    (text, [name, value]) => text.replaceAll(`{${name}}`, String(value)),
+    template,
+  );
 }
 
 export type { TranslationKey };

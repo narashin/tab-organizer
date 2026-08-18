@@ -21,6 +21,7 @@ export interface OrganizationResponse {
   ok: boolean;
   state?: OrganizationState;
   proposal?: SynchronizationProposal;
+  reviewing?: boolean;
   applyResult?: { applied: number; skipped: number };
   error?: 'invalid_request' | 'operation_failed';
 }
@@ -54,8 +55,10 @@ export function createOrganizationMessageHandler(service: OrganizationService): 
           return { ok: true, proposal: await service.review(message.scope) };
         case 'sync/latest': {
           const proposal = await service.latestProposal();
-          // An absent proposal is a valid answer, not a failure, so `ok` stays true.
-          return proposal === null ? { ok: true } : { ok: true, proposal };
+          // A popup that opens mid-run finds no proposal yet, which is why the answer also carries
+          // whether one is still being produced. An absent proposal is valid, so `ok` stays true.
+          const reviewing = service.isReviewing();
+          return proposal === null ? { ok: true, reviewing } : { ok: true, proposal, reviewing };
         }
         case 'sync/apply':
           return { ok: true, applyResult: await service.apply(message.proposalId, message.selectedTabIds) };

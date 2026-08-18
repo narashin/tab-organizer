@@ -118,6 +118,10 @@ export class OrganizationService {
     return this.synchronization.latestProposal();
   }
 
+  isReviewing(): boolean {
+    return this.synchronization.isReviewing();
+  }
+
   async apply(proposalId: string, selectedTabIds: number[]) {
     return this.synchronization.apply(proposalId, selectedTabIds);
   }

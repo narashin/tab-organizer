@@ -67,6 +67,23 @@ export interface SynchronizationChange {
   splitViewId: number | null;
 }
 
+export type SynchronizationSkipReason = 'not_in_plan' | 'too_few_tabs';
+
+/**
+ * A group the run decided against creating, and why.
+ *
+ * Both gates below end in tabs staying put, and a single "unchanged" count cannot explain either.
+ * Reporting the title the model asked for is what lets a user act: add a preset, or widen the
+ * grouping breadth.
+ */
+export interface SynchronizationSkippedGroup {
+  title: string;
+  tabCount: number;
+  reason: SynchronizationSkipReason;
+  /** The floor a new group had to clear. Null when the title itself was refused. */
+  minimumTabs: number | null;
+}
+
 export interface SynchronizationProposal {
   id: string;
   scope: 'all' | 'current';
@@ -74,7 +91,19 @@ export interface SynchronizationProposal {
   unchangedCount: number;
   // Tabs whose chunk failed every attempt. They stay put, but silence would misreport coverage.
   failedTabCount: number;
+  skippedGroups: SynchronizationSkippedGroup[];
+  /**
+   * Why the run had no plan to hold the chunks together, or null when it had one.
+   *
+   * Losing the plan is survivable but not neutral: chunks of five tabs then name groups without
+   * knowing what the other chunks called the same thing, which is exactly how a window ends up with
+   * a dozen one-tab groups that are all discarded as too small. Swallowing that made the outcome
+   * look like a grouping decision rather than a failed request.
+   */
+  planFailureReason: string | null;
 }
+
+const PLAN_FAILURE_REASON_MAX_LENGTH = 120;
 
 interface StoredSynchronizationProposal {
   proposal: SynchronizationProposal;
@@ -99,6 +128,7 @@ export class SynchronizationService {
   private readonly applyTasks = new Map<string, Promise<{ applied: number; skipped: number }>>();
   private proposalStorageMutation: Promise<void> = Promise.resolve();
   private operationMutation: Promise<void> = Promise.resolve();
+  private reviewsInFlight = 0;
 
   constructor(
     private readonly classifier: Classifier,
@@ -153,6 +183,7 @@ export class SynchronizationService {
     tabs: BrowserTab[],
     groups: ClassificationGroup[],
     presets: Awaited<ReturnType<PresetStore['list']>>,
+    planFailures: string[],
   ): Promise<string[] | undefined> {
     if (this.taxonomyPlanner === undefined || tabs.length <= SYNCHRONIZATION_CHUNK_SIZE) {
       return undefined;
@@ -169,21 +200,45 @@ export class SynchronizationService {
       maxTitles: maxGroupCount(this.getGranularity(), tabs.length),
     };
     // Without a plan the chunks invent rival names, so this pass earns the same retry as a chunk.
+    let lastFailure = 'taxonomy_unavailable';
     for (let attempt = 0; attempt < SYNCHRONIZATION_CHUNK_ATTEMPTS; attempt += 1) {
       try {
         const entries = await this.taxonomyPlanner.plan(request);
         const titles = entries.map((entry) => entry.title);
         if (titles.length > 0) return titles;
-        return undefined;
-      } catch {
-        // The taxonomy pass is an optimization; chunking alone still produces a usable proposal.
+        lastFailure = 'taxonomy_empty_plan';
+        break;
+      } catch (error: unknown) {
+        // Chunking alone still produces a proposal, so the run continues and reports the reason.
+        lastFailure = error instanceof Error ? error.message : 'taxonomy_failed';
+        // A second identical request would spend the same budget and hit the same ceiling, and the
+        // window waits the whole time for a plan it will not get.
+        if (isTimeout(lastFailure)) break;
       }
     }
+    planFailures.push(lastFailure.slice(0, PLAN_FAILURE_REASON_MAX_LENGTH));
     return undefined;
   }
 
   async review(scope: 'all' | 'current'): Promise<SynchronizationProposal> {
-    return this.enqueueOperation(() => this.reviewOnce(scope));
+    this.reviewsInFlight += 1;
+    try {
+      return await this.enqueueOperation(() => this.reviewOnce(scope));
+    } finally {
+      this.reviewsInFlight -= 1;
+    }
+  }
+
+  /**
+   * Whether a review is running right now.
+   *
+   * Deliberately held in memory rather than in storage. The run lives in this worker, so if the
+   * worker is gone the run is gone with it, and a persisted flag would keep claiming progress that
+   * nothing is making. The popup asks this on open because a run outlives the window that started
+   * it, and reopening mid-run otherwise looks like nothing ever happened.
+   */
+  isReviewing(): boolean {
+    return this.reviewsInFlight > 0;
   }
 
   private async reviewOnce(scope: 'all' | 'current'): Promise<SynchronizationProposal> {
@@ -194,6 +249,7 @@ export class SynchronizationService {
 
     const windowIds = [...new Set(eligible.map((tab) => tab.windowId))];
     const failures: unknown[] = [];
+    const planFailures: string[] = [];
     let attemptedChunks = 0;
     let succeededChunks = 0;
     const windowResults = await mapWithConcurrency(
@@ -203,6 +259,7 @@ export class SynchronizationService {
         changes: SynchronizationChange[];
         unchangedCount: number;
         failedTabCount: number;
+        skippedGroups: SynchronizationSkippedGroup[];
       }> => {
       const windowTabs = eligible.filter((tab) => tab.windowId === windowId);
       // Cues are matched here, against the full local URL, so a path can decide a group without
@@ -227,7 +284,9 @@ export class SynchronizationService {
       }
       const groups = await this.platform.listGroups(windowId);
       const classificationGroups = groups.map(({ ref, title, color }) => ({ ref, title, color }));
-      const approvedGroupTitles = await this.planApprovedTitles(tabs, classificationGroups, presets);
+      const approvedGroupTitles = await this.planApprovedTitles(
+        tabs, classificationGroups, presets, planFailures,
+      );
       const chunks = chunkList(tabs, SYNCHRONIZATION_CHUNK_SIZE);
       const chunkedDecisions = await mapWithConcurrency(
         chunks,
@@ -250,9 +309,10 @@ export class SynchronizationService {
       const changes: SynchronizationChange[] = [];
       const canonicalTitles = new Map<string, string>();
       const assignedColors = new Map<string, GroupColor>();
-      const approvedTitles = approvedGroupTitles === undefined
+      const plannedTitles = approvedGroupTitles === undefined
         ? undefined
-        : new Set(approvedGroupTitles.map((title) => title.trim().toLowerCase()));
+        : toPlannedTitles(approvedGroupTitles);
+      const skippedGroups = new Map<string, SynchronizationSkippedGroup>();
       let unchangedCount = 0;
       for (const decision of decisions) {
         const tabId = parseTabRef(decision.tabRef);
@@ -261,14 +321,20 @@ export class SynchronizationService {
           unchangedCount += 1;
           continue;
         }
-        const target = resolveTarget(
-          decision, groups, presets, canonicalTitles, assignedColors, approvedTitles,
+        const resolution = resolveTarget(
+          decision, groups, presets, canonicalTitles, assignedColors, plannedTitles,
         );
-        if (target === null) throw new Error('synchronization_invalid_target');
-        if (target === 'unchanged') {
+        if (resolution.outcome === 'invalid') throw new Error('synchronization_invalid_target');
+        if (resolution.outcome === 'unchanged') {
           unchangedCount += 1;
           continue;
         }
+        if (resolution.outcome === 'rejected_title') {
+          unchangedCount += 1;
+          recordSkippedGroup(skippedGroups, resolution.title, 1, 'not_in_plan', null);
+          continue;
+        }
+        const target = resolution.target;
         const current = groups.find((group) => group.groupId === tab.groupId);
         if (
           (target.kind === 'existing_group' && target.groupId === tab.groupId) ||
@@ -294,14 +360,16 @@ export class SynchronizationService {
           splitViewId: tab.splitViewId ?? null,
         });
       }
-      const kept = withoutUndersizedNewGroups(
-        changes,
-        effectiveMinTabsPerNewGroup(this.getGranularity(), tabs.length),
-      );
+      const minimumTabs = effectiveMinTabsPerNewGroup(this.getGranularity(), tabs.length);
+      const { kept, dropped } = withoutUndersizedNewGroups(changes, minimumTabs);
+      for (const group of dropped) {
+        recordSkippedGroup(skippedGroups, group.title, group.tabCount, 'too_few_tabs', minimumTabs);
+      }
       return {
         changes: kept,
         unchangedCount: unchangedCount + (changes.length - kept.length),
         failedTabCount,
+        skippedGroups: [...skippedGroups.values()],
       };
       },
     );
@@ -312,9 +380,15 @@ export class SynchronizationService {
     const changes = windowResults.flatMap((result) => result.changes);
     const unchangedCount = windowResults.reduce((total, result) => total + result.unchangedCount, 0);
     const failedTabCount = windowResults.reduce((total, result) => total + result.failedTabCount, 0);
+    const skippedGroups = mergeSkippedGroups(
+      windowResults.flatMap((result) => result.skippedGroups),
+    );
 
     markSplitViewConflicts(changes);
-    const proposal = { id: this.createProposalId(), scope, changes, unchangedCount, failedTabCount };
+    const proposal: SynchronizationProposal = {
+      id: this.createProposalId(), scope, changes, unchangedCount, failedTabCount, skippedGroups,
+      planFailureReason: planFailures[0] ?? null,
+    };
     this.proposals.clear();
     this.proposals.set(proposal.id, {
       proposal,
@@ -574,6 +648,16 @@ export class SynchronizationService {
   }
 }
 
+/**
+ * Recognizes a request that ran out of time rather than one that came back wrong.
+ *
+ * The timeout is raised here, but the abort can surface either as this project's own timeout error
+ * or as the platform's `AbortError`, whose message reads "signal is aborted without reason".
+ */
+function isTimeout(message: string): boolean {
+  return message.includes('timeout') || message.toLowerCase().includes('abort');
+}
+
 async function mapWithConcurrency<Input, Output>(
   inputs: Input[],
   limit: number,
@@ -636,18 +720,60 @@ function matchPresetByCue(
 function withoutUndersizedNewGroups(
   changes: SynchronizationChange[],
   minimumTabs: number,
-): SynchronizationChange[] {
-  const counts = new Map<string, number>();
+): { kept: SynchronizationChange[]; dropped: { title: string; tabCount: number }[] } {
+  const counts = new Map<string, { title: string; tabCount: number }>();
   for (const change of changes) {
     if (change.target.kind !== 'new_group') continue;
-    const key = change.target.title.trim().toLowerCase();
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+    const key = normalizeGroupTitle(change.target.title);
+    const entry = counts.get(key);
+    if (entry === undefined) {
+      counts.set(key, { title: change.target.title, tabCount: 1 });
+    } else {
+      entry.tabCount += 1;
+    }
   }
-  return changes.filter((change) => {
-    if (change.target.kind !== 'new_group') return true;
-    const key = change.target.title.trim().toLowerCase();
-    return (counts.get(key) ?? 0) >= minimumTabs;
-  });
+  return {
+    kept: changes.filter((change) => {
+      if (change.target.kind !== 'new_group') return true;
+      const entry = counts.get(normalizeGroupTitle(change.target.title));
+      return (entry?.tabCount ?? 0) >= minimumTabs;
+    }),
+    dropped: [...counts.values()].filter((entry) => entry.tabCount < minimumTabs),
+  };
+}
+
+function recordSkippedGroup(
+  into: Map<string, SynchronizationSkippedGroup>,
+  title: string,
+  tabCount: number,
+  reason: SynchronizationSkipReason,
+  minimumTabs: number | null,
+): void {
+  const key = `${reason}:${normalizeGroupTitle(title)}`;
+  const existing = into.get(key);
+  if (existing === undefined) {
+    into.set(key, { title, tabCount, reason, minimumTabs });
+    return;
+  }
+  existing.tabCount += tabCount;
+}
+
+/** Windows are classified independently, so the same title can be refused in more than one. */
+function mergeSkippedGroups(entries: SynchronizationSkippedGroup[]): SynchronizationSkippedGroup[] {
+  const merged = new Map<string, SynchronizationSkippedGroup>();
+  for (const entry of entries) {
+    const key = `${entry.reason}:${normalizeGroupTitle(entry.title)}`;
+    const existing = merged.get(key);
+    if (existing === undefined) {
+      merged.set(key, { ...entry });
+      continue;
+    }
+    existing.tabCount += entry.tabCount;
+    existing.minimumTabs = existing.minimumTabs === null || entry.minimumTabs === null
+      ? existing.minimumTabs ?? entry.minimumTabs
+      : Math.max(existing.minimumTabs, entry.minimumTabs);
+  }
+  return [...merged.values()];
 }
 
 function chunkList<Item>(items: Item[], size: number): Item[][] {
@@ -735,70 +861,171 @@ function findGroupByTitle(groups: BrowserGroup[], title: string): BrowserGroup |
   return groups.find((candidate) => normalizeGroupTitle(candidate.title) === normalized);
 }
 
+interface PlannedTitle {
+  title: string;
+  tokens: string[];
+}
+
+/** Splits a title into whole words so matching can never fire on part of one. */
+function titleTokens(title: string): string[] {
+  return normalizeGroupTitle(title)
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((token) => token.length > 0);
+}
+
+/**
+ * Prepares the planned titles for matching, dropping ones too short to identify a group.
+ *
+ * A one-character title would claim every tab that happens to contain that character, which is a
+ * worse outcome than leaving those tabs alone.
+ */
+function toPlannedTitles(titles: string[]): PlannedTitle[] {
+  return titles
+    .map((title) => ({ title: title.trim(), tokens: titleTokens(title) }))
+    .filter((entry) => entry.title.length > 0 && entry.tokens.join('').length >= 2);
+}
+
+function containsTokenRun(haystack: string[], needle: string[]): boolean {
+  if (needle.length === 0 || needle.length > haystack.length) return false;
+  for (let start = 0; start + needle.length <= haystack.length; start += 1) {
+    if (needle.every((token, index) => haystack[start + index] === token)) return true;
+  }
+  return false;
+}
+
+/**
+ * Maps a proposed new-group title onto the planned title it belongs to.
+ *
+ * The plan is a whitelist, and a chunk routinely proposes a variant of a planned name — "ForgeHub
+ * Iter 1" where the plan says "ForgeHub". Demanding the exact string dropped those tabs even though
+ * the concept was approved, and it split the count that decides whether the group is worth creating
+ * at all. Matching runs on whole words in order, in either direction, so "Hub" can never claim
+ * "ForgeHub". The longest planned title wins because it is the more specific one; when two planned
+ * titles match equally well the tab is left alone rather than assigned arbitrarily, which is how a
+ * tied text cue is treated.
+ */
+function canonicalizeAgainstPlan(title: string, plan: PlannedTitle[]): string | undefined {
+  const tokens = titleTokens(title);
+  if (tokens.length === 0) return undefined;
+  let best: { title: string; score: number } | undefined;
+  let tied = false;
+  for (const entry of plan) {
+    if (!containsTokenRun(tokens, entry.tokens) && !containsTokenRun(entry.tokens, tokens)) continue;
+    const score = entry.tokens.join('').length;
+    if (best === undefined || score > best.score) {
+      best = { title: entry.title, score };
+      tied = false;
+    } else if (
+      score === best.score &&
+      normalizeGroupTitle(entry.title) !== normalizeGroupTitle(best.title)
+    ) {
+      tied = true;
+    }
+  }
+  return tied ? undefined : best?.title;
+}
+
+type TargetResolution =
+  | { outcome: 'target'; target: SynchronizationTarget }
+  | { outcome: 'unchanged' }
+  // The model asked for a group the plan does not allow. The title is reported, not silently lost.
+  | { outcome: 'rejected_title'; title: string }
+  | { outcome: 'invalid' };
+
 function resolveTarget(
   decision: Awaited<ReturnType<Classifier['classify']>>[number],
   groups: BrowserGroup[],
   presets: Awaited<ReturnType<PresetStore['list']>>,
   canonicalTitles: Map<string, string>,
   assignedColors: Map<string, GroupColor>,
-  approvedTitles: Set<string> | undefined,
-): SynchronizationTarget | 'unchanged' | null {
+  plan: PlannedTitle[] | undefined,
+): TargetResolution {
   if (decision.kind === 'existing_group') {
     const group = groups.find((candidate) => candidate.ref === decision.targetRef);
-    return group === undefined ? null : {
-      kind: 'existing_group', ref: group.ref, groupId: group.groupId, title: group.title,
-      color: group.color, description: null,
+    return group === undefined ? { outcome: 'invalid' } : {
+      outcome: 'target',
+      target: {
+        kind: 'existing_group', ref: group.ref, groupId: group.groupId, title: group.title,
+        color: group.color, description: null,
+      },
     };
   }
   if (decision.kind === 'preset') {
     const preset = presets.find((candidate) => candidate.id === decision.targetRef);
-    if (preset === undefined) return null;
+    if (preset === undefined) return { outcome: 'invalid' };
     // A preset names a group that may already exist from an earlier run. Reuse it instead of asking
     // for a new group, which Chrome would happily create beside the one with the same name.
     const existing = findGroupByTitle(groups, preset.name);
     if (existing !== undefined) {
       return {
-        kind: 'existing_group', ref: existing.ref, groupId: existing.groupId, title: existing.title,
-        color: existing.color, description: null,
+        outcome: 'target',
+        target: {
+          kind: 'existing_group', ref: existing.ref, groupId: existing.groupId,
+          title: existing.title, color: existing.color, description: null,
+        },
       };
     }
     return {
-      kind: 'preset', ref: preset.id, groupId: null, title: preset.name, color: preset.color,
-      description: preset.description,
+      outcome: 'target',
+      target: {
+        kind: 'preset', ref: preset.id, groupId: null, title: preset.name, color: preset.color,
+        description: preset.description,
+      },
     };
   }
   if (decision.kind === 'new_group' && decision.suggestedName !== null) {
-    const title = decision.suggestedName.trim();
-    if (title.length === 0) return 'unchanged';
-    const normalized = title.toLowerCase();
+    const proposed = decision.suggestedName.trim();
+    if (proposed.length === 0) return { outcome: 'unchanged' };
 
-    // A title that already names a group or preset must reuse it; the apply path has no dedup.
-    const group = findGroupByTitle(groups, title);
-    if (group !== undefined) {
-      return {
-        kind: 'existing_group', ref: group.ref, groupId: group.groupId, title: group.title,
-        color: group.color, description: null,
-      };
+    // A title that already names a group or preset must reuse it; the apply path has no dedup. This
+    // runs before the plan is consulted, because joining what exists is never a new group.
+    const reused = reuseByTitle(proposed, groups, presets);
+    if (reused !== undefined) return { outcome: 'target', target: reused };
+
+    let title = proposed;
+    if (plan !== undefined) {
+      const planned = canonicalizeAgainstPlan(proposed, plan);
+      if (planned === undefined) return { outcome: 'rejected_title', title: proposed };
+      title = planned;
+      // Folding a variant onto its planned title can land on a group or preset that already exists.
+      const plannedReuse = reuseByTitle(title, groups, presets);
+      if (plannedReuse !== undefined) return { outcome: 'target', target: plannedReuse };
     }
-    const preset = presets.find((candidate) => candidate.name.trim().toLowerCase() === normalized);
-    if (preset !== undefined) {
-      return {
-        kind: 'preset', ref: preset.id, groupId: null, title: preset.name, color: preset.color,
-        description: preset.description,
-      };
-    }
-    if (approvedTitles !== undefined && !approvedTitles.has(normalized)) return 'unchanged';
 
     // Chunks propose the same group independently, so one casing wins for the whole window.
+    const normalized = normalizeGroupTitle(title);
     const canonical = canonicalTitles.get(normalized);
     if (canonical === undefined) canonicalTitles.set(normalized, title);
     return {
-      kind: 'new_group', ref: null, groupId: null, title: canonical ?? title,
-      color: assignGroupColor(canonical ?? title, groups, assignedColors),
-      description: decision.suggestedDescription,
+      outcome: 'target',
+      target: {
+        kind: 'new_group', ref: null, groupId: null, title: canonical ?? title,
+        color: assignGroupColor(canonical ?? title, groups, assignedColors),
+        description: decision.suggestedDescription,
+      },
     };
   }
-  return null;
+  return { outcome: 'invalid' };
+}
+
+function reuseByTitle(
+  title: string,
+  groups: BrowserGroup[],
+  presets: Awaited<ReturnType<PresetStore['list']>>,
+): SynchronizationTarget | undefined {
+  const group = findGroupByTitle(groups, title);
+  if (group !== undefined) {
+    return {
+      kind: 'existing_group', ref: group.ref, groupId: group.groupId, title: group.title,
+      color: group.color, description: null,
+    };
+  }
+  const normalized = normalizeGroupTitle(title);
+  const preset = presets.find((candidate) => normalizeGroupTitle(candidate.name) === normalized);
+  return preset === undefined ? undefined : {
+    kind: 'preset', ref: preset.id, groupId: null, title: preset.name, color: preset.color,
+    description: preset.description,
+  };
 }
 
 function toClassificationGroup(group: BrowserGroup | undefined): ClassificationGroup | null {
@@ -820,22 +1047,50 @@ function getHostname(value: string): string {
 }
 
 function parseStoredProposal(value: unknown): StoredSynchronizationProposal | null {
-  if (!isRecord(value) || !isSynchronizationProposal(value.proposal) || !isRecord(value.reviewedUrls)) {
-    return null;
-  }
+  if (!isRecord(value) || !isRecord(value.proposal) || !isRecord(value.reviewedUrls)) return null;
+  const proposal = parseProposal(value.proposal);
+  if (proposal === null) return null;
   const reviewedUrls: Record<string, string> = {};
   for (const [tabId, url] of Object.entries(value.reviewedUrls)) {
     if (!/^\d+$/.test(tabId) || typeof url !== 'string') return null;
     reviewedUrls[tabId] = url;
   }
-  return { proposal: value.proposal, reviewedUrls };
+  return { proposal, reviewedUrls };
 }
 
-function isSynchronizationProposal(value: unknown): value is SynchronizationProposal {
-  return isRecord(value) && typeof value.id === 'string' &&
-    (value.scope === 'all' || value.scope === 'current') &&
-    Array.isArray(value.changes) && value.changes.every(isSynchronizationChange) &&
-    typeof value.unchangedCount === 'number' && typeof value.failedTabCount === 'number';
+function parseProposal(value: Record<string, unknown>): SynchronizationProposal | null {
+  if (
+    typeof value.id !== 'string' || (value.scope !== 'all' && value.scope !== 'current') ||
+    typeof value.unchangedCount !== 'number' || typeof value.failedTabCount !== 'number' ||
+    !Array.isArray(value.changes)
+  ) {
+    return null;
+  }
+  const changes = value.changes.filter(isSynchronizationChange);
+  if (changes.length !== value.changes.length) return null;
+  // A proposal written before skipped groups existed is still a usable review list, so a missing
+  // field reads as an empty list rather than as corruption.
+  const rawSkipped = value.skippedGroups ?? [];
+  if (!Array.isArray(rawSkipped)) return null;
+  const skippedGroups = rawSkipped.filter(isSkippedGroup);
+  if (skippedGroups.length !== rawSkipped.length) return null;
+  const planFailureReason = value.planFailureReason ?? null;
+  if (planFailureReason !== null && typeof planFailureReason !== 'string') return null;
+  return {
+    id: value.id,
+    scope: value.scope,
+    changes,
+    unchangedCount: value.unchangedCount,
+    failedTabCount: value.failedTabCount,
+    skippedGroups,
+    planFailureReason,
+  };
+}
+
+function isSkippedGroup(value: unknown): value is SynchronizationSkippedGroup {
+  return isRecord(value) && typeof value.title === 'string' && typeof value.tabCount === 'number' &&
+    (value.reason === 'not_in_plan' || value.reason === 'too_few_tabs') &&
+    (value.minimumTabs === null || typeof value.minimumTabs === 'number');
 }
 
 function isSynchronizationChange(value: unknown): value is SynchronizationChange {

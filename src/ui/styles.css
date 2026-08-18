@@ -392,16 +392,30 @@ select {
   width: 100%;
 }
 
-.btn--link {
-  justify-self: start;
-  height: auto;
+/* Actions inside a group are real buttons, not underlined text: a link affordance next to
+   checkboxes read as prose and went unnoticed. Filled dark rather than outlined, because a white
+   button on a white body is the thing that went unnoticed in the first place. Accent red stays
+   reserved for the one primary action on the screen. */
+.btn--soft {
+  color: var(--color-bg);
+  background: var(--color-fg);
+  border-color: var(--color-fg);
+}
+
+.btn--soft:hover:not(:disabled) {
+  background: #000;
+}
+
+/* Square, for a button whose whole label is a drawing. */
+.btn--icon {
+  width: 32px;
+  height: 32px;
   padding: 0;
+  color: var(--color-fg-muted);
+}
+
+.btn--icon:hover:not(:disabled) {
   color: var(--color-fg);
-  background: none;
-  border: 0;
-  font-size: var(--text-xs);
-  text-decoration: underline;
-  text-underline-offset: 3px;
 }
 
 .btn-row {
@@ -550,6 +564,45 @@ select {
   background: var(--color-surface);
 }
 
+/* A run takes tens of seconds on a large window, so the wait needs a moving part and a sentence
+   saying the work is not tied to this popup. */
+.progress {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+}
+
+.progress__spinner {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 2px solid var(--color-border);
+  border-top-color: var(--color-fg);
+  border-radius: 50%;
+  animation: spin 900ms linear infinite;
+}
+
+.progress__text {
+  display: grid;
+  gap: var(--space-1);
+}
+
+.progress__note {
+  color: var(--color-fg-muted);
+  font-size: var(--text-xs);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress__spinner {
+    animation-duration: 3s;
+  }
+}
+
 .empty {
   margin: 0;
   padding: var(--space-5) 0;
@@ -617,9 +670,24 @@ select {
   gap: var(--space-3);
 }
 
-.check-row + .check-row {
+/* The separator belongs to the whole entry, not to the label: the row also carries a per-tab
+   action beside the checkbox, and the notes below it. */
+.tab-entry + .tab-entry {
   padding-top: var(--space-2);
   border-top: 1px solid var(--color-border);
+}
+
+.tab-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-2);
+}
+
+/* Group-wide actions sit away from the checkbox column so they cannot be mistaken for a row. */
+.group__actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .check-row input {

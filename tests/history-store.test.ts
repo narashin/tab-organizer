@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   HistoryRestorer,
   HistoryStore,
+  undoableOperationId,
   type HistoryGroup,
   type HistoryPlatform,
   type PriorTabState,
@@ -83,6 +84,34 @@ describe('HistoryStore and HistoryRestorer', () => {
     ]);
 
     expect((await store.list()).map((operation) => operation.tabs[0]?.tabId)).toEqual([2, 1]);
+  });
+
+  it('refuses to undo anything but the most recent operation still in effect', async () => {
+    const storage = new MemoryStorage();
+    let nextId = 0;
+    const store = new HistoryStore(storage, () => `operation-${nextId += 1}`, () => 100);
+    const expectedGroup = { groupId: 7, title: 'After', color: 'red' as const };
+    await store.record('sync', [{ tabId: 1, windowId: 3, group: null, expectedGroup }]);
+    await store.record('sync', [{ tabId: 2, windowId: 3, group: null, expectedGroup }]);
+    const restorer = new HistoryRestorer(store, new RecordingHistoryPlatform());
+
+    // Undo is a stack: reverting the older run while the newer one stands is not a state the user
+    // could have reached by acting.
+    await expect(restorer.undo('operation-1')).rejects.toThrow('history_not_latest');
+
+    await restorer.undo('operation-2');
+
+    // Once the newer one is undone the older becomes the top of the stack.
+    expect(undoableOperationId(await store.list())).toBe('operation-1');
+    await expect(restorer.undo('operation-1')).resolves.toBeDefined();
+  });
+
+  it('has nothing to undo once every operation has been undone', async () => {
+    const store = new HistoryStore(new MemoryStorage(), () => 'operation-1', () => 100);
+    await store.record('sync', [{ tabId: 1, windowId: 1, group: null }]);
+    await store.markUndone('operation-1');
+
+    expect(undoableOperationId(await store.list())).toBeNull();
   });
 
   it('restores existing tabs, recreates missing groups, and skips closed tabs', async () => {

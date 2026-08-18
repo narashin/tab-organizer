@@ -3,6 +3,17 @@ import type { OrganizationRequest, OrganizationResponse } from '../background/or
 import type { PresetDraft } from '../background/preset-store';
 import type { SynchronizationProposal } from '../background/synchronization-service';
 
+/**
+ * What the background has for the review section right now.
+ *
+ * The two answers arrive together on purpose: asking for the proposal and for progress separately
+ * leaves a gap where a run can finish between the calls, and the popup would show neither.
+ */
+export interface ReviewStatus {
+  proposal: SynchronizationProposal | null;
+  reviewing: boolean;
+}
+
 export interface OrganizationClient {
   getState(): Promise<OrganizationState>;
   createPreset(draft: PresetDraft): Promise<OrganizationState>;
@@ -14,7 +25,7 @@ export interface OrganizationClient {
   unlockAndAnalyze(tabId: number): Promise<OrganizationState>;
   retryFirstPage(tabId: number): Promise<OrganizationState>;
   review(scope: 'all' | 'current'): Promise<SynchronizationProposal>;
-  latestProposal(): Promise<SynchronizationProposal | null>;
+  reviewStatus(): Promise<ReviewStatus>;
   apply(proposalId: string, selectedTabIds: number[]): Promise<{ applied: number; skipped: number }>;
   undo(operationId: string): Promise<OrganizationState>;
 }
@@ -41,12 +52,14 @@ export class RuntimeOrganizationClient implements OrganizationClient {
     return response.proposal;
   }
 
-  // A review that is still awaiting a decision outlives the popup, so the UI asks for it on load.
-  async latestProposal(): Promise<SynchronizationProposal | null> {
+  // A review outlives the popup, whether it is finished and waiting or still running, so the UI
+  // asks for both on load and again while a run is in flight.
+  async reviewStatus(): Promise<ReviewStatus> {
     const response = await this.request({ type: 'sync/latest' });
-    if (response.proposal === undefined) return null;
+    const reviewing = response.reviewing === true;
+    if (response.proposal === undefined) return { proposal: null, reviewing };
     if (!isSynchronizationProposal(response.proposal)) throw new Error('organization_request_failed');
-    return response.proposal;
+    return { proposal: response.proposal, reviewing };
   }
 
   async apply(proposalId: string, selectedTabIds: number[]) {

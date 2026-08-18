@@ -49,6 +49,18 @@ export interface HistoryPlatform {
 const HISTORY_KEY = 'organizationHistory';
 const HISTORY_LIMIT = 10;
 
+/**
+ * The one operation an undo may target, or null when nothing is left to undo.
+ *
+ * History is newest first, so this is the most recent operation still in effect. Undo is offered as
+ * a stack because that is what the word promises: reverting a run from five steps back, while four
+ * later runs stand, is a state no sequence of user actions would have produced. Restoring one older
+ * run in isolation is a different feature, and calling it undo is what made it confusing.
+ */
+export function undoableOperationId(history: readonly HistoryOperation[]): string | null {
+  return history.find((operation) => operation.undoneAt === null)?.id ?? null;
+}
+
 export class HistoryStore {
   private storageMutation: Promise<void> = Promise.resolve();
 
@@ -147,9 +159,13 @@ export class HistoryRestorer {
   }
 
   private async undoOnce(id: string): Promise<{ restored: number; skipped: number }> {
-    const operation = (await this.store.list()).find((item) => item.id === id);
+    const history = await this.store.list();
+    const operation = history.find((item) => item.id === id);
     if (operation === undefined) throw new Error('history_not_found');
     if (operation.undoneAt !== null) throw new Error('history_already_undone');
+    // Enforced here rather than by disabling a button: a popup left open across a later run would
+    // still be showing the stale one as the newest.
+    if (undoableOperationId(history) !== id) throw new Error('history_not_latest');
 
     const windowIds = [...new Set(operation.tabs.map((tab) => tab.windowId))];
     const currentTabs = new Map(

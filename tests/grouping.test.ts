@@ -1,6 +1,25 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  taxonomyTimeoutMs,
+  TAXONOMY_TIMEOUT_CEILING_MS,
+  TAXONOMY_TIMEOUT_FLOOR_MS,
+} from '../src/background/classifier';
+
+describe('taxonomy timeout', () => {
+  it('grows with the window, because reading a hundred titles is not an eight-second job', () => {
+    // The flat ceiling this replaced aborted every attempt on a hundred-tab window.
+    expect(taxonomyTimeoutMs(100)).toBeGreaterThan(8_000);
+    expect(taxonomyTimeoutMs(100)).toBeGreaterThan(taxonomyTimeoutMs(20));
+  });
+
+  it('keeps a floor for small windows and a ceiling for absurd ones', () => {
+    expect(taxonomyTimeoutMs(1)).toBe(TAXONOMY_TIMEOUT_FLOOR_MS);
+    expect(taxonomyTimeoutMs(10_000)).toBe(TAXONOMY_TIMEOUT_CEILING_MS);
+  });
+});
+
+import {
   DEFAULT_GROUPING_GRANULARITY,
   MAX_GROUP_COUNT,
   effectiveMinTabsPerNewGroup,

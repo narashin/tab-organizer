@@ -72,8 +72,24 @@ export function classificationTimeoutMs(tabCount: number): number {
   return Math.max(CLASSIFICATION_TIMEOUT_FLOOR_MS, tabCount * CLASSIFICATION_TIMEOUT_PER_TAB_MS);
 }
 
-// The plan returns at most ten short titles, so its cost is prefill-bound rather than output-bound.
-export const TAXONOMY_TIMEOUT_MS = 8_000;
+/**
+ * The plan returns at most ten short titles, so its cost is prefill-bound rather than output-bound.
+ *
+ * A flat ceiling still did not hold: reading a hundred titles and deciding which ones mean the same
+ * thing takes longer than reading twenty, and an aborted plan is worse than a slow one. A window of
+ * a hundred tabs timed out at eight seconds every attempt, and the run fell back to naming each
+ * batch of five tabs on its own, which produced twenty-one groups too small to create.
+ */
+export const TAXONOMY_TIMEOUT_PER_TAB_MS = 300;
+export const TAXONOMY_TIMEOUT_FLOOR_MS = 15_000;
+export const TAXONOMY_TIMEOUT_CEILING_MS = 60_000;
+
+export function taxonomyTimeoutMs(tabCount: number): number {
+  return Math.min(
+    TAXONOMY_TIMEOUT_CEILING_MS,
+    Math.max(TAXONOMY_TIMEOUT_FLOOR_MS, tabCount * TAXONOMY_TIMEOUT_PER_TAB_MS),
+  );
+}
 
 export type DecisionKind = 'existing_group' | 'preset' | 'new_group' | 'no_change';
 

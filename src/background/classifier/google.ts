@@ -6,7 +6,7 @@ import {
   isRecord,
   resolveTaxonomy,
   taxonomySchema,
-  TAXONOMY_TIMEOUT_MS,
+  taxonomyTimeoutMs,
   validateDecisions,
   withTimeout,
   type ClassificationDecision,
@@ -159,11 +159,12 @@ export class GeminiTaxonomyPlanner implements TaxonomyPlanner {
   constructor(
     private readonly endpoint: ProviderEndpoint,
     private readonly fetcher: typeof fetch = fetch,
-    private readonly requestTimeoutMs = TAXONOMY_TIMEOUT_MS,
+    private readonly configuredTimeoutMs?: number,
   ) {}
 
   async plan(request: TaxonomyRequest): Promise<TaxonomyEntry[]> {
     const requestController = new AbortController();
+    const requestTimeoutMs = this.configuredTimeoutMs ?? taxonomyTimeoutMs(request.tabs.length);
     const response = await withTimeout((signal) => this.fetcher(
       requestUrl(this.endpoint),
       {
@@ -172,7 +173,7 @@ export class GeminiTaxonomyPlanner implements TaxonomyPlanner {
         body: requestBody(buildTaxonomyInstructions(request.maxTitles), request, taxonomySchema),
         signal,
       },
-    ), this.requestTimeoutMs, requestController);
+    ), requestTimeoutMs, requestController);
 
     if (!response.ok) {
       throw new Error('taxonomy_request_failed');
@@ -180,7 +181,7 @@ export class GeminiTaxonomyPlanner implements TaxonomyPlanner {
 
     let payload: unknown;
     try {
-      payload = await withTimeout(() => response.json(), this.requestTimeoutMs, requestController);
+      payload = await withTimeout(() => response.json(), requestTimeoutMs, requestController);
     } catch (error: unknown) {
       if (error instanceof Error && error.message === 'classification_request_timeout') {
         throw error;

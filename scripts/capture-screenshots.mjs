@@ -103,9 +103,13 @@ try {
   await popup.reload();
   await popup.getByRole('button', { name: 'Review' }).click();
   await popup.getByRole('button', { name: 'Sync current window' }).click();
-  await popup.locator('summary').first().waitFor();
+  // The first summary on screen can be the "groups left uncreated" block, which is not a proposal.
+  const group = popup.locator('details.group', { has: popup.locator('.check-row') }).first();
+  await group.locator('summary').waitFor();
   // Open one group so the image shows what a proposal looks like from the inside.
-  await popup.locator('summary').first().click();
+  await group.locator('summary').click();
+  // The shell clips at the popup height, so an opened group has to be brought into view.
+  await group.scrollIntoViewIfNeeded();
   await shot('review');
 } finally {
   await context.close();

@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 
 import type { OrganizationState } from '../background/organization-service';
+import { undoableOperationId } from '../background/history-store';
 import type { GroupColor, PresetDraft } from '../background/preset-store';
 import type { SettingsState } from '../background/settings-service';
 import type { SynchronizationProposal } from '../background/synchronization-service';
 import {
+  fillPlaceholders,
   translations,
   withProviderName,
   type LocaleSelection,
@@ -62,6 +64,10 @@ const providerKeyLabels: Record<Provider, TranslationKey> = {
   anthropic: 'providerAnthropic',
   google: 'providerGoogle',
 };
+// Slow enough to be free next to a run that takes tens of seconds, quick enough that the result
+// does not sit finished behind a spinner.
+const REVIEW_POLL_INTERVAL_MS = 1_500;
+
 const colors: GroupColor[] = ['grey', 'blue', 'red', 'yellow', 'green', 'pink', 'purple', 'cyan', 'orange'];
 const colorKeys: Record<GroupColor, TranslationKey> = {
   grey: 'colorGrey', blue: 'colorBlue', red: 'colorRed', yellow: 'colorYellow',
@@ -128,13 +134,42 @@ export function App({
       });
       // Restoring the pending review is best effort: without it the section just looks unreviewed,
       // which is the same state the user would see anyway.
-      void organizationClient.latestProposal().then((next) => {
-        if (active && next !== null) setProposal(next);
+      void organizationClient.reviewStatus().then((status) => {
+        if (!active) return;
+        if (status.proposal !== null) setProposal(status.proposal);
+        // A run started before this popup opened owns the section until it lands.
+        if (status.reviewing) setIsReviewing(true);
       }).catch(() => undefined);
     }
     return () => { active = false; };
   }, [settingsClient, organizationClient, loadAttempt]);
 
+  /**
+   * Follows a run this popup is not awaiting itself.
+   *
+   * The popup that started a review holds its promise and needs nothing here. A popup opened in the
+   * middle of one has no promise to hold, so it asks the worker until the answer arrives. Polling,
+   * rather than a port, because the worker is free to sleep between requests and a dropped port
+   * would leave the section frozen on a spinner.
+   */
+  useEffect(() => {
+    if (!isReviewing || organizationClient === undefined) return undefined;
+    let active = true;
+    const timer = setInterval(() => {
+      void organizationClient.reviewStatus().then((status) => {
+        if (!active || status.reviewing) return;
+        if (status.proposal !== null) setProposal(status.proposal);
+        setIsReviewing(false);
+      }).catch(() => {
+        // The worker is unreachable, so nothing is going to finish. Stop claiming otherwise.
+        if (active) setIsReviewing(false);
+      });
+    }, REVIEW_POLL_INTERVAL_MS);
+    return () => { active = false; clearInterval(timer); };
+  }, [isReviewing, organizationClient]);
+
+  // The same rule the background enforces, so the interface cannot offer what would be refused.
+  const undoableId = undoableOperationId(organization?.history ?? []);
   const locale = settings?.locale ?? 'en';
   const text = translations[locale];
   useEffect(() => {
@@ -429,7 +464,15 @@ export function App({
                 {text.syncCurrent}
               </button>
               {isReviewing ? (
-                <p className="banner banner--info" role="status" aria-label={text.reviewingTabs}>{text.reviewingTabs}</p>
+                <div className="banner banner--info progress" role="status" aria-label={text.reviewingTabs}>
+                  <span className="progress__spinner" aria-hidden="true" />
+                  <span className="progress__text">
+                    <span>{text.reviewingTabs}</span>
+                    {/* The run belongs to the background worker, not to this popup, and its result
+                        is stored. Saying so is what makes the wait usable. */}
+                    <span className="progress__note">{text.reviewingNotice}</span>
+                  </span>
+                </div>
               ) : null}
               <button
                 type="button"
@@ -456,6 +499,39 @@ export function App({
                       {text.failedTabCount}: {proposal.failedTabCount}
                     </p>
                   ) : null}
+                  {proposal.planFailureReason === null ? null : (
+                    <p className="banner banner--warning" role="status">
+                      {text.planFailed}: {proposal.planFailureReason}
+                    </p>
+                  )}
+                  {/* Both refusals end in tabs staying put, and the unchanged count alone reads as
+                      "nothing matched" when the truth is a name was rejected or a group was too
+                      small to be worth creating. */}
+                  {proposal.skippedGroups.length > 0 ? (
+                    <details className="group">
+                      <summary className="group__summary">
+                        <span className="swatch swatch--grey" aria-hidden="true" />
+                        <span className="group__label">
+                          {`${text.skippedGroupsTitle} (${proposal.skippedGroups.length})`}
+                        </span>
+                      </summary>
+                      <div className="group__body">
+                        {proposal.skippedGroups.map((skipped) => (
+                          <p
+                            key={`${skipped.reason}:${skipped.title}`}
+                            className="field__note"
+                          >
+                            {`${skipped.title} · ${skipped.reason === 'too_few_tabs'
+                              ? fillPlaceholders(text.skippedTooFewTabs, {
+                                count: skipped.tabCount,
+                                minimum: skipped.minimumTabs ?? skipped.tabCount,
+                              })
+                              : text.skippedNotInPlan}`}
+                          </p>
+                        ))}
+                      </div>
+                    </details>
+                  ) : null}
 
                   {proposalGroups.map(([key, changes]) => {
                     const firstChange = changes[0];
@@ -467,6 +543,17 @@ export function App({
                       : '';
                     // One text node on purpose: the summary line is asserted as a whole string.
                     const summary = `${label}${windowSuffix} (${changes.length})`;
+                    // Blocked rows cannot be selected at all, so they must not decide what the
+                    // group-wide control does.
+                    const selectable = changes.filter((change) => change.blockedReason === null);
+                    const allSelected = selectable.length > 0 &&
+                      selectable.every((change) => change.selected);
+                    const toggleAll = (selected: boolean) => setProposal({
+                      ...proposal,
+                      changes: proposal.changes.map((item) => selectable.some((change) => change.tabId === item.tabId)
+                        ? { ...item, selected }
+                        : item),
+                    });
                     return (
                       <details key={key} className="group">
                         <summary className="group__summary">
@@ -474,85 +561,102 @@ export function App({
                           <span className="group__label">{summary}</span>
                         </summary>
                         <div className="group__body">
+                          {/* Rejecting a group of twenty by unticking twenty boxes is what this
+                              replaces, and it reads the current state so it can also put them back. */}
+                          {selectable.length > 0 ? (
+                            <div className="group__actions">
+                              <button
+                                type="button"
+                                className="btn btn--soft btn--sm"
+                                disabled={isReviewing || isApplying}
+                                onClick={() => toggleAll(!allSelected)}
+                              >
+                                {fillPlaceholders(allSelected ? text.deselectAll : text.selectAll, {
+                                  group: firstChange.target.title,
+                                })}
+                              </button>
+                            </div>
+                          ) : null}
                           {changes.map((change) => (
-                            <div key={change.tabId}>
-                              <label className="check-row">
-                                <input
-                                  type="checkbox"
-                                  checked={change.selected}
-                                  disabled={change.blockedReason !== null || isReviewing || isApplying}
-                                  onChange={(event) => setProposal({
-                                    ...proposal,
-                                    changes: proposal.changes.map((item) => item.tabId === change.tabId
-                                      ? { ...item, selected: event.currentTarget.checked }
-                                      : item),
-                                  })}
-                                />
-                                <span className="row__main">
-                                  <span className="row__title">{change.title}</span>
-                                  <span className="row__meta">
-                                    {change.hostname} · {Math.round(change.confidence * 100)}%
+                            <div key={change.tabId} className="tab-entry">
+                              <div className="tab-row">
+                                <label className="check-row">
+                                  <input
+                                    type="checkbox"
+                                    checked={change.selected}
+                                    disabled={change.blockedReason !== null || isReviewing || isApplying}
+                                    onChange={(event) => setProposal({
+                                      ...proposal,
+                                      changes: proposal.changes.map((item) => item.tabId === change.tabId
+                                        ? { ...item, selected: event.currentTarget.checked }
+                                        : item),
+                                    })}
+                                  />
+                                  <span className="row__main">
+                                    <span className="row__title">{change.title}</span>
+                                    {/* The model's confidence used to sit here. It never changed
+                                        what anyone did with the row, so it was noise beside the
+                                        one fact that identifies the tab. */}
+                                    <span className="row__meta">{change.hostname}</span>
                                   </span>
-                                </span>
-                              </label>
+                                </label>
+                                {/* One repeated action per row, so it is drawn rather than spelled out.
+                                    The tab it acts on lives in the accessible name instead. */}
+                                {change.blockedReason === null ? (
+                                  <button
+                                    type="button"
+                                    className="btn btn--ghost btn--icon"
+                                    aria-label={`${text.lockTab} ${change.title}`}
+                                    title={text.lockTab}
+                                    disabled={isReviewing || isApplying}
+                                    onClick={() => void run(async () => {
+                                      if (organizationClient === undefined) return;
+                                      setOrganization(await organizationClient.lockTab(change.tabId));
+                                      setProposal({
+                                        ...proposal,
+                                        changes: proposal.changes.map((item) => item.tabId === change.tabId
+                                          ? { ...item, selected: false }
+                                          : item),
+                                      });
+                                    })}
+                                  >
+                                    <LockIcon />
+                                  </button>
+                                ) : null}
+                              </div>
                               {isSplitViewConflict ? (
                                 <p className="field__note">{text.proposedTarget}: {change.target.title}</p>
                               ) : null}
                               {change.blockedReason !== null ? (
                                 <p className="field__note">{text.splitViewBlocked}</p>
                               ) : null}
-                              {change.blockedReason === null ? (
-                                <button
-                                  type="button"
-                                  className="btn btn--link"
-                                  disabled={isReviewing || isApplying}
-                                  onClick={() => void run(async () => {
-                                    if (organizationClient === undefined) return;
-                                    setOrganization(await organizationClient.lockTab(change.tabId));
-                                    setProposal({
-                                      ...proposal,
-                                      changes: proposal.changes.map((item) => item.tabId === change.tabId
-                                        ? { ...item, selected: false }
-                                        : item),
-                                    });
-                                  })}
-                                >
-                                  {text.lockTab} {change.title}
-                                </button>
-                              ) : null}
                             </div>
                           ))}
 
-                          <button
-                            type="button"
-                            className="btn btn--link"
-                            disabled={isReviewing || isApplying}
-                            onClick={() => setProposal({
-                              ...proposal,
-                              changes: proposal.changes.map((item) => changes.some((change) => change.tabId === item.tabId)
-                                ? { ...item, selected: false }
-                                : item),
-                            })}
-                          >
-                            {isSplitViewConflict ? text.keepUnchanged : `${text.rejectGroup} ${firstChange.target.title}`}
-                          </button>
+                          {/* A conflicted Split View pair has nothing selectable, so the group-wide
+                              toggle above is absent and this states the outcome instead. */}
+                          {isSplitViewConflict ? (
+                            <p className="field__note">{text.keepUnchanged}</p>
+                          ) : null}
                           {firstChange.target.kind === 'new_group' ? (
-                            <button
-                              type="button"
-                              className="btn btn--link"
-                              disabled={isReviewing || isApplying}
-                              onClick={() => void run(async () => {
-                                if (organizationClient === undefined) return;
-                                setOrganization(await organizationClient.createPreset({
-                                  name: firstChange.target.title,
-                                  description: firstChange.target.description ?? firstChange.reason,
-                                  cues: [],
-                                  color: firstChange.target.color,
-                                }));
-                              })}
-                            >
-                              {text.saveAsPreset}
-                            </button>
+                            <div className="group__actions">
+                              <button
+                                type="button"
+                                className="btn btn--soft btn--sm"
+                                disabled={isReviewing || isApplying}
+                                onClick={() => void run(async () => {
+                                  if (organizationClient === undefined) return;
+                                  setOrganization(await organizationClient.createPreset({
+                                    name: firstChange.target.title,
+                                    description: firstChange.target.description ?? firstChange.reason,
+                                    cues: [],
+                                    color: firstChange.target.color,
+                                  }));
+                                })}
+                              >
+                                {text.saveAsPreset}
+                              </button>
+                            </div>
                           ) : null}
                         </div>
                       </details>
@@ -774,7 +878,9 @@ export function App({
           <>
             <section className="card">
               <h1 className="card__title">{text.historyTitle}</h1>
-              {(organization?.history ?? []).length === 0 ? <p className="empty">{text.noHistory}</p> : null}
+              {(organization?.history ?? []).length === 0
+                ? <p className="empty">{text.noHistory}</p>
+                : <p className="field__note">{text.undoLatestOnly}</p>}
             </section>
 
             {organization?.history.map((operation) => (
@@ -790,7 +896,7 @@ export function App({
                   <button
                     type="button"
                     className="btn btn--ghost btn--sm"
-                    disabled={operation.undoneAt !== null || undoingOperationId === operation.id}
+                    disabled={operation.id !== undoableId || undoingOperationId === operation.id}
                     onClick={() => {
                       if (organizationClient === undefined || undoingOperationId !== null) return;
                       setUndoingOperationId(operation.id);
@@ -1005,5 +1111,26 @@ export function App({
         />
       ) : null}
     </main>
+  );
+}
+
+/**
+ * A padlock, drawn rather than written.
+ *
+ * Emoji are banned in this codebase and a glyph would inherit whatever the platform font decides,
+ * so the shape is inline SVG. It carries no accessible name: the button around it does.
+ */
+function LockIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" focusable="false">
+      <path
+        d="M4.75 7V4.9a3.25 3.25 0 0 1 6.5 0V7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+      <rect x="3" y="7" width="10" height="6.75" rx="1.75" fill="currentColor" />
+    </svg>
   );
 }

@@ -635,6 +635,11 @@ describe('SynchronizationService', () => {
     expect(proposal.changes).toHaveLength(4);
     expect(new Set(proposal.changes.map((change) => change.target.title))).toEqual(new Set(['Reading']));
     expect(proposal.unchangedCount).toBe(2);
+    // Two tabs staying put is indistinguishable from two tabs nothing matched, unless the run says
+    // which group it refused to create and what the floor was.
+    expect(proposal.skippedGroups).toEqual([
+      { title: 'Odds', tabCount: 2, reason: 'too_few_tabs', minimumTabs: 3 },
+    ]);
   });
 
   it('still moves a single tab into a group that already exists', async () => {
@@ -949,6 +954,282 @@ describe('SynchronizationService', () => {
     expect(requests).toHaveLength(2);
     expect(requests.every((request) => request.approvedGroupTitles === undefined)).toBe(true);
     expect(proposal.unchangedCount).toBe(7);
+  });
+
+  /**
+   * Reviews eight tabs in one window against a fixed plan, with each tab's proposed group name
+   * supplied by the caller. Eight tabs keeps the taxonomy pass on and the balanced floor at four.
+   */
+  const reviewAgainstPlan = async (
+    plannedTitles: string[],
+    proposedNames: string[],
+  ) => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const windowTabs: BrowserTab[] = proposedNames.map((_, index) => ({
+      tabId: index + 1500,
+      windowId: 21,
+      title: `Tab ${index}`,
+      url: `https://host-${index}.test/page`,
+      groupId: -1,
+      incognito: false,
+    }));
+    const classifier: Classifier = {
+      classify: async (request) => request.tabs.map((tab) => ({
+        tabRef: tab.ref,
+        kind: 'new_group' as const,
+        targetRef: null,
+        suggestedName: proposedNames[Number(tab.ref.replace('tab-', '')) - 1500] ?? 'Unnamed',
+        suggestedDescription: null,
+        confidence: 0.9,
+        reason: 'Proposed',
+      })),
+    };
+    const planner: TaxonomyPlanner = {
+      plan: async () => plannedTitles.map((title) => ({
+        title, kind: 'new_group' as const, ref: null,
+      })),
+    };
+    const platform: SynchronizationPlatform = {
+      listTabs: async () => windowTabs,
+      listGroups: async () => [],
+      getTab: async (tabId) => windowTabs.find((tab) => tab.tabId === tabId) ?? null,
+      moveToExistingGroup: async () => undefined,
+      moveToNewGroup: async () => 1,
+    };
+    const service = new SynchronizationService(
+      classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
+      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'planned',
+      session, planner,
+    );
+    return service.review('all');
+  };
+
+  it('reports a run as in flight only while it is actually running', async () => {
+    const { service } = createHarness();
+
+    expect(service.isReviewing()).toBe(false);
+
+    const pending = service.review('current');
+    // A popup that opens here has no proposal to show yet, and needs to know why.
+    expect(service.isReviewing()).toBe(true);
+
+    await pending;
+
+    expect(service.isReviewing()).toBe(false);
+  });
+
+  it('stops reporting a run as in flight once it has failed', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const service = new SynchronizationService(
+      { classify: async () => { throw new Error('classification_failed'); } },
+      new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
+      new HistoryStore(local, () => 'history', () => 1), new RecordingPlatform(),
+      () => 'en', () => 'failed', session,
+    );
+
+    await expect(service.review('all')).rejects.toThrow('classification_failed');
+
+    // A stuck flag would leave the popup spinning on a run that ended.
+    expect(service.isReviewing()).toBe(false);
+  });
+
+  it('keeps a review that finished after its caller stopped waiting', async () => {
+    // The interface tells the user the popup can be closed mid-run. That only holds if the result
+    // is retrievable afterwards rather than delivered to whoever asked.
+    const { service, session } = createHarness();
+
+    const pending = service.review('current');
+    const proposal = await pending;
+
+    expect(session.values.synchronizationProposal).toBeDefined();
+    expect(await service.latestProposal()).toMatchObject({ id: proposal.id });
+  });
+
+  it('reports why a run had no plan, because chunk-by-chunk naming fragments the window', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const windowTabs: BrowserTab[] = Array.from({ length: 8 }, (_, index) => ({
+      tabId: index + 1700,
+      windowId: 22,
+      title: `Tab ${index}`,
+      url: `https://host-${index}.test/page`,
+      groupId: -1,
+      incognito: false,
+    }));
+    const planner: TaxonomyPlanner = {
+      plan: async () => { throw new Error('taxonomy_invalid_response'); },
+    };
+    const platform: SynchronizationPlatform = {
+      listTabs: async () => windowTabs,
+      listGroups: async () => [],
+      getTab: async (tabId) => windowTabs.find((tab) => tab.tabId === tabId) ?? null,
+      moveToExistingGroup: async () => undefined,
+      moveToNewGroup: async () => 1,
+    };
+    const service = new SynchronizationService(
+      new RecordingClassifier(), new PresetStore(local, () => 'preset'),
+      new TabLockStore(session, () => 1), new HistoryStore(local, () => 'history', () => 1),
+      platform, () => 'en', () => 'unplanned', session, planner,
+    );
+
+    const proposal = await service.review('all');
+
+    expect(proposal.planFailureReason).toBe('taxonomy_invalid_response');
+  });
+
+  it('does not spend a second plan attempt on a request that ran out of time', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const windowTabs: BrowserTab[] = Array.from({ length: 8 }, (_, index) => ({
+      tabId: index + 1900,
+      windowId: 24,
+      title: `Tab ${index}`,
+      url: `https://host-${index}.test/page`,
+      groupId: -1,
+      incognito: false,
+    }));
+    let planCalls = 0;
+    const planner: TaxonomyPlanner = {
+      plan: async () => {
+        planCalls += 1;
+        // What Chrome reports once the request controller aborts.
+        throw new Error('signal is aborted without reason');
+      },
+    };
+    const platform: SynchronizationPlatform = {
+      listTabs: async () => windowTabs,
+      listGroups: async () => [],
+      getTab: async (tabId) => windowTabs.find((tab) => tab.tabId === tabId) ?? null,
+      moveToExistingGroup: async () => undefined,
+      moveToNewGroup: async () => 1,
+    };
+    const service = new SynchronizationService(
+      new RecordingClassifier(), new PresetStore(local, () => 'preset'),
+      new TabLockStore(session, () => 1), new HistoryStore(local, () => 'history', () => 1),
+      platform, () => 'en', () => 'timed-out', session, planner,
+    );
+
+    const proposal = await service.review('all');
+
+    // Retrying doubles the wait for a plan the same request will not deliver.
+    expect(planCalls).toBe(1);
+    expect(proposal.planFailureReason).toBe('signal is aborted without reason');
+  });
+
+  it('reports a plan that came back empty separately from one that threw', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const windowTabs: BrowserTab[] = Array.from({ length: 8 }, (_, index) => ({
+      tabId: index + 1800,
+      windowId: 23,
+      title: `Tab ${index}`,
+      url: `https://host-${index}.test/page`,
+      groupId: -1,
+      incognito: false,
+    }));
+    let planCalls = 0;
+    const planner: TaxonomyPlanner = {
+      plan: async () => { planCalls += 1; return []; },
+    };
+    const platform: SynchronizationPlatform = {
+      listTabs: async () => windowTabs,
+      listGroups: async () => [],
+      getTab: async (tabId) => windowTabs.find((tab) => tab.tabId === tabId) ?? null,
+      moveToExistingGroup: async () => undefined,
+      moveToNewGroup: async () => 1,
+    };
+    const service = new SynchronizationService(
+      new RecordingClassifier(), new PresetStore(local, () => 'preset'),
+      new TabLockStore(session, () => 1), new HistoryStore(local, () => 'history', () => 1),
+      platform, () => 'en', () => 'empty-plan', session, planner,
+    );
+
+    const proposal = await service.review('all');
+
+    expect(proposal.planFailureReason).toBe('taxonomy_empty_plan');
+    // An empty plan is an answer, not a transport failure, so it is not retried.
+    expect(planCalls).toBe(1);
+  });
+
+  it('folds a variant of a planned title onto the planned one instead of dropping the tabs', async () => {
+    const proposal = await reviewAgainstPlan(
+      ['ForgeHub'],
+      Array.from({ length: 8 }, () => 'ForgeHub Iter 1'),
+    );
+
+    expect(proposal.changes).toHaveLength(8);
+    expect(new Set(proposal.changes.map((change) => change.target.title))).toEqual(new Set(['ForgeHub']));
+    expect(proposal.skippedGroups).toEqual([]);
+    expect(proposal.planFailureReason).toBeNull();
+  });
+
+  it('counts variants of one planned title together when deciding the group is worth creating', async () => {
+    // Neither variant reaches the floor of four on its own; the concept they share does.
+    const proposal = await reviewAgainstPlan(
+      ['ForgeHub'],
+      ['ForgeHub Iter 1', 'ForgeHub Iter 1', 'ForgeHub docs', 'ForgeHub docs',
+        'Weekly digest', 'Weekly digest', 'Weekly digest', 'Weekly digest'],
+    );
+
+    expect(proposal.changes.map((change) => change.target.title)).toEqual([
+      'ForgeHub', 'ForgeHub', 'ForgeHub', 'ForgeHub',
+    ]);
+    expect(proposal.skippedGroups).toEqual([
+      { title: 'Weekly digest', tabCount: 4, reason: 'not_in_plan', minimumTabs: null },
+    ]);
+    expect(proposal.unchangedCount).toBe(4);
+  });
+
+  it('refuses a title that only shares part of a word with a planned one', async () => {
+    const proposal = await reviewAgainstPlan(['ForgeHub'], Array.from({ length: 8 }, () => 'Hub'));
+
+    expect(proposal.changes).toEqual([]);
+    expect(proposal.skippedGroups).toEqual([
+      { title: 'Hub', tabCount: 8, reason: 'not_in_plan', minimumTabs: null },
+    ]);
+  });
+
+  it('leaves tabs alone when two planned titles match a proposal equally well', async () => {
+    const proposal = await reviewAgainstPlan(
+      ['Docs', 'News'],
+      Array.from({ length: 8 }, () => 'Docs News'),
+    );
+
+    expect(proposal.changes).toEqual([]);
+    expect(proposal.skippedGroups).toEqual([
+      { title: 'Docs News', tabCount: 8, reason: 'not_in_plan', minimumTabs: null },
+    ]);
+  });
+
+  it('reads a proposal stored before skipped groups existed', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const stored = {
+      proposal: {
+        id: 'legacy', scope: 'current', unchangedCount: 1, failedTabCount: 0,
+        changes: [{
+          tabId: 4, windowId: 10, title: 'Normal A', hostname: 'a.test', currentGroup: null,
+          currentGroupId: -1, confidence: 0.8, reason: 'Similar titles', selected: true,
+          blockedReason: null, splitViewId: null,
+          target: {
+            kind: 'new_group', ref: null, groupId: null, title: 'Reading', color: 'blue',
+            description: null,
+          },
+        }],
+      },
+      reviewedUrls: { '4': 'https://a.test/page' },
+    };
+    session.values.synchronizationProposal = stored;
+    const service = new SynchronizationService(
+      new RecordingClassifier(), new PresetStore(local, () => 'preset'),
+      new TabLockStore(session, () => 1), new HistoryStore(local, () => 'history', () => 1),
+      new RecordingPlatform(), () => 'en', () => 'proposal-1', session,
+    );
+
+    // An update must not throw away a review the user is in the middle of.
+    expect(await service.latestProposal()).toMatchObject({ id: 'legacy', skippedGroups: [] });
   });
 
   it('bounds concurrent chunk requests and gives every chunk the same groups and presets', async () => {

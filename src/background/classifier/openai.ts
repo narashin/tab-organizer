@@ -6,7 +6,7 @@ import {
   isRecord,
   resolveTaxonomy,
   taxonomySchema,
-  TAXONOMY_TIMEOUT_MS,
+  taxonomyTimeoutMs,
   validateDecisions,
   withTimeout,
   type ClassificationDecision,
@@ -92,12 +92,13 @@ export class OpenAiTaxonomyPlanner implements TaxonomyPlanner {
   constructor(
     private readonly endpoint: ProviderEndpoint,
     private readonly fetcher: typeof fetch = fetch,
-    private readonly requestTimeoutMs = TAXONOMY_TIMEOUT_MS,
+    private readonly configuredTimeoutMs?: number,
   ) {}
 
   async plan(request: TaxonomyRequest): Promise<TaxonomyEntry[]> {
     const fetcher = this.fetcher;
     const requestController = new AbortController();
+    const requestTimeoutMs = this.configuredTimeoutMs ?? taxonomyTimeoutMs(request.tabs.length);
     const response = await withTimeout((signal) => fetcher(
       `${this.endpoint.baseUrl}/responses`,
       {
@@ -122,7 +123,7 @@ export class OpenAiTaxonomyPlanner implements TaxonomyPlanner {
         }),
         signal,
       },
-    ), this.requestTimeoutMs, requestController);
+    ), requestTimeoutMs, requestController);
 
     if (!response.ok) {
       throw new Error('taxonomy_request_failed');
@@ -132,7 +133,7 @@ export class OpenAiTaxonomyPlanner implements TaxonomyPlanner {
     try {
       payload = await withTimeout(
         () => response.json(),
-        this.requestTimeoutMs,
+        requestTimeoutMs,
         requestController,
       );
     } catch (error: unknown) {

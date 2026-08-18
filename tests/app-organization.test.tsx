@@ -51,8 +51,10 @@ class MemoryOrganizationClient implements OrganizationClient {
   applyCalls = 0;
   // What the background still holds from an earlier review, as the popup would find it on reopen.
   pendingProposal: SynchronizationProposal | null = null;
+  // Whether a run started before this popup opened is still going.
+  reviewing = false;
   async getState() { return this.state; }
-  async latestProposal() { return this.pendingProposal; }
+  async reviewStatus() { return { proposal: this.pendingProposal, reviewing: this.reviewing }; }
   async createPreset(draft: PresetDraft) {
     this.state = { ...this.state, presets: [...this.state.presets, { id: 'preset-1', ...draft }] };
     return this.state;
@@ -79,7 +81,7 @@ class MemoryOrganizationClient implements OrganizationClient {
   }
   async review(): Promise<SynchronizationProposal> {
     return {
-      id: 'proposal-1', scope: 'current', unchangedCount: 2, failedTabCount: 0,
+      id: 'proposal-1', scope: 'current', unchangedCount: 2, failedTabCount: 0, skippedGroups: [], planFailureReason: null,
       changes: [
         { tabId: 1, windowId: 3, title: 'Normal', hostname: 'normal.test', currentGroup: null, currentGroupId: -1,
           target: { kind: 'new_group', ref: null, groupId: null, title: 'Work', color: 'grey', description: 'Work tabs' },
@@ -124,7 +126,7 @@ class GroupProposalOrganizationClient extends MemoryOrganizationClient {
 class ConflictOrganizationClient extends MemoryOrganizationClient {
   override async review(): Promise<SynchronizationProposal> {
     return {
-      id: 'conflict', scope: 'current', unchangedCount: 0, failedTabCount: 0,
+      id: 'conflict', scope: 'current', unchangedCount: 0, failedTabCount: 0, skippedGroups: [], planFailureReason: null,
       changes: [
         { tabId: 11, windowId: 3, title: 'Split left', hostname: 'left.test', currentGroup: null,
           currentGroupId: -1, target: { kind: 'new_group', ref: null, groupId: null, title: 'Left group', color: 'grey', description: null },
@@ -377,6 +379,103 @@ describe('App organization flows', () => {
     expect(screen.getByText(/Other · Window 2/)).toBeVisible();
   });
 
+  it('names the groups it refused to create and why, instead of only counting unchanged tabs', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    const pending = await organization.review();
+    organization.pendingProposal = {
+      ...pending,
+      skippedGroups: [
+        { title: 'ForgeHub', tabCount: 3, reason: 'too_few_tabs', minimumTabs: 4 },
+        { title: 'Weekly digest', tabCount: 2, reason: 'not_in_plan', minimumTabs: null },
+      ],
+    };
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(await screen.findByText(/Groups left uncreated \(2\)/));
+
+    expect(screen.getByText('ForgeHub · needs 4 tabs, has 3')).toBeVisible();
+    expect(
+      screen.getByText('Weekly digest · not one of the names planned for this window'),
+    ).toBeVisible();
+  });
+
+  it('shows progress while a review runs and says the wait does not hold the browser', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    const finished = await organization.review();
+    let release: (proposal: SynchronizationProposal) => void = () => undefined;
+    organization.review = () => new Promise<SynchronizationProposal>((resolve) => { release = resolve; });
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(await screen.findByRole('button', { name: 'Sync current window' }));
+
+    const progress = await screen.findByRole('status', { name: 'Reviewing tabs' });
+    expect(within(progress).getByText(/runs in the background/)).toBeVisible();
+
+    release(finished);
+
+    // The progress block gives way to the result rather than lingering.
+    expect(await screen.findByText(/Work \(/)).toBeVisible();
+    expect(screen.queryByRole('status', { name: 'Reviewing tabs' })).toBeNull();
+  });
+
+  it('picks up a run that started before the popup opened, and shows its result when it lands', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    const finished = await organization.review();
+    // What a popup reopened mid-run finds: no proposal yet, but work in progress.
+    organization.reviewing = true;
+    let reviews = 0;
+    organization.review = async () => { reviews += 1; return finished; };
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Review' }));
+
+    expect(await screen.findByRole('status', { name: 'Reviewing tabs' })).toBeVisible();
+    // Watching a run is not starting one.
+    expect(reviews).toBe(0);
+
+    organization.reviewing = false;
+    organization.pendingProposal = finished;
+
+    expect(await screen.findByText(/Work \(/, undefined, { timeout: 4_000 })).toBeVisible();
+    expect(screen.queryByRole('status', { name: 'Reviewing tabs' })).toBeNull();
+  });
+
+  it('selects and deselects a whole group at once, leaving other groups alone', async () => {
+    const user = userEvent.setup();
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={new GroupProposalOrganizationClient()} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    await user.click(await screen.findByText(/Work \(2\)/));
+
+    expect(screen.getByRole('button', { name: 'Apply selected (2)' })).toBeEnabled();
+
+    await user.click(screen.getByRole('button', { name: 'Deselect all in Work' }));
+
+    expect(screen.getByRole('button', { name: 'Apply selected (0)' })).toBeDisabled();
+
+    // The control flips, so an accidental rejection costs one click rather than every checkbox.
+    await user.click(screen.getByRole('button', { name: 'Select all in Work' }));
+
+    expect(screen.getByRole('button', { name: 'Apply selected (2)' })).toBeEnabled();
+  });
+
+  it('says when the run had no grouping plan, since that is why the groups came out small', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    const pending = await organization.review();
+    organization.pendingProposal = { ...pending, planFailureReason: 'taxonomy_invalid_response' };
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Review' }));
+
+    expect(await screen.findByText(/Reason: taxonomy_invalid_response/)).toBeVisible();
+  });
+
   it('restores a review left pending by an earlier session without running it again', async () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
@@ -487,7 +586,7 @@ describe('App organization flows', () => {
     await user.click(screen.getByRole('button', { name: 'Sync current window' }));
 
     expect(screen.getByText('Selected changes: 2')).toBeVisible();
-    await user.click(screen.getByRole('button', { name: 'Reject group Work' }));
+    await user.click(screen.getByRole('button', { name: 'Deselect all in Work' }));
 
     expect(screen.getByText('Selected changes: 0')).toBeVisible();
     expect(screen.getByRole('button', { name: 'Apply selected (0)' })).toBeDisabled();
@@ -525,7 +624,10 @@ describe('App organization flows', () => {
     await user.click(summary);
     expect(screen.getByText('Proposed target: Left group')).toBeVisible();
     expect(screen.getByText('Proposed target: Right group')).toBeVisible();
-    expect(screen.getByRole('button', { name: 'Keep unchanged' })).toBeVisible();
+    // Nothing in a conflicted pair can be selected, so the outcome is stated rather than offered as
+    // a control that would do nothing.
+    expect(screen.getByText('Keep unchanged')).toBeVisible();
+    expect(screen.queryByRole('button', { name: /Deselect all in/ })).toBeNull();
   });
 
   it('prevents duplicate apply requests while one is pending', async () => {
@@ -563,7 +665,7 @@ describe('App organization flows', () => {
 
     expect(screen.getByRole('button', { name: 'Sync current window' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Sync current window' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Reject group Work' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Deselect all in Work' })).toBeDisabled();
     expect(screen.getByRole('checkbox', { name: /Normal/ })).toBeDisabled();
     resolveApply?.({ applied: 1, skipped: 0 });
     expect(await screen.findByText('Applied changes: 1 · Skipped changes: 0')).toBeVisible();
@@ -663,6 +765,31 @@ describe('App organization flows', () => {
 
     expect(organization.undoneIds).toEqual(['history-1']);
     expect(await screen.findByRole('button', { name: 'Undone' })).toBeDisabled();
+  });
+
+  it('offers undo on the newest operation only, and moves it down as they are undone', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    const entry = (id: string, undoneAt: number | null) => ({
+      id, kind: 'sync' as const, createdAt: 100, tabs: [{ tabId: 1, windowId: 3, group: null }], undoneAt,
+    });
+    // Newest first, which is the order the background stores them in.
+    organization.state = { ...organization.state, history: [entry('newer', null), entry('older', null)] };
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'History' }));
+
+    expect(screen.getByText('Only the most recent organization can be undone.')).toBeVisible();
+    const [newest, older] = screen.getAllByRole('button', { name: 'Undo' });
+    expect(newest).toBeEnabled();
+    // The background refuses this one, so the interface must not offer it.
+    expect(older).toBeDisabled();
+
+    organization.state = { ...organization.state, history: [entry('newer', 200), entry('older', null)] };
+    await user.click(newest as HTMLElement);
+
+    // Undoing the top of the stack promotes the one beneath it.
+    expect(await screen.findByRole('button', { name: 'Undone' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeEnabled();
   });
 
   it('disables repeated undo submission while the operation is pending', async () => {
