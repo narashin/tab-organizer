@@ -1,3 +1,4 @@
+import { detachFetch } from '../../shared/fetcher';
 import {
   buildClassificationInstructions,
   buildTaxonomyInstructions,
@@ -103,11 +104,15 @@ export function extractGeminiText(payload: unknown): string | null {
 }
 
 export class GeminiClassifier implements Classifier {
+  private readonly fetcher: typeof fetch;
+
   constructor(
     private readonly endpoint: ProviderEndpoint,
-    private readonly fetcher: typeof fetch = fetch,
+    fetcher: typeof fetch = fetch,
     private readonly configuredTimeoutMs?: number,
-  ) {}
+  ) {
+    this.fetcher = detachFetch(fetcher);
+  }
 
   async classify(request: ClassificationRequest): Promise<ClassificationDecision[]> {
     const requestTimeoutMs = this.configuredTimeoutMs ?? classificationTimeoutMs(request.tabs.length);
@@ -156,11 +161,15 @@ export class GeminiClassifier implements Classifier {
 }
 
 export class GeminiTaxonomyPlanner implements TaxonomyPlanner {
+  private readonly fetcher: typeof fetch;
+
   constructor(
     private readonly endpoint: ProviderEndpoint,
-    private readonly fetcher: typeof fetch = fetch,
+    fetcher: typeof fetch = fetch,
     private readonly configuredTimeoutMs?: number,
-  ) {}
+  ) {
+    this.fetcher = detachFetch(fetcher);
+  }
 
   async plan(request: TaxonomyRequest): Promise<TaxonomyEntry[]> {
     const requestController = new AbortController();

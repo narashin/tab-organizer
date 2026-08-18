@@ -1,3 +1,4 @@
+import { detachFetch } from '../../shared/fetcher';
 import {
   buildClassificationInstructions,
   buildTaxonomyInstructions,
@@ -19,18 +20,20 @@ import {
 } from './contract';
 
 export class OpenAiClassifier implements Classifier {
+  private readonly fetcher: typeof fetch;
+
   constructor(
     private readonly endpoint: ProviderEndpoint,
-    private readonly fetcher: typeof fetch = fetch,
+    fetcher: typeof fetch = fetch,
     private readonly configuredTimeoutMs?: number,
-  ) {}
+  ) {
+    this.fetcher = detachFetch(fetcher);
+  }
 
-  async classify(_request: ClassificationRequest): Promise<ClassificationDecision[]> {
-    const request = _request;
-    const fetcher = this.fetcher;
+  async classify(request: ClassificationRequest): Promise<ClassificationDecision[]> {
     const requestTimeoutMs = this.configuredTimeoutMs ?? classificationTimeoutMs(request.tabs.length);
     const requestController = new AbortController();
-    const response = await withTimeout((signal) => fetcher(
+    const response = await withTimeout((signal) => this.fetcher(
       `${this.endpoint.baseUrl}/responses`,
       {
         method: 'POST',
@@ -89,17 +92,20 @@ export class OpenAiClassifier implements Classifier {
 }
 
 export class OpenAiTaxonomyPlanner implements TaxonomyPlanner {
+  private readonly fetcher: typeof fetch;
+
   constructor(
     private readonly endpoint: ProviderEndpoint,
-    private readonly fetcher: typeof fetch = fetch,
+    fetcher: typeof fetch = fetch,
     private readonly configuredTimeoutMs?: number,
-  ) {}
+  ) {
+    this.fetcher = detachFetch(fetcher);
+  }
 
   async plan(request: TaxonomyRequest): Promise<TaxonomyEntry[]> {
-    const fetcher = this.fetcher;
     const requestController = new AbortController();
     const requestTimeoutMs = this.configuredTimeoutMs ?? taxonomyTimeoutMs(request.tabs.length);
-    const response = await withTimeout((signal) => fetcher(
+    const response = await withTimeout((signal) => this.fetcher(
       `${this.endpoint.baseUrl}/responses`,
       {
         method: 'POST',
