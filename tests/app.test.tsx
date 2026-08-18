@@ -27,6 +27,7 @@ function createState(overrides: Partial<SettingsState> = {}): SettingsState {
     baseUrlIsDefault: true,
     groupingGranularity: 'balanced',
     sendPathEnabled: false,
+    sortTabsEnabled: false,
     firstPageEnabled: true,
     ...overrides,
   };
@@ -98,6 +99,10 @@ class MemorySettingsClient implements SettingsClient {
     return this.state;
   }
 
+  async setSortTabsEnabled(sortTabsEnabled: boolean): Promise<SettingsState> {
+    this.state = createState({ ...this.state, sortTabsEnabled });
+    return this.state;
+  }
   async setSendPathEnabled(sendPathEnabled: boolean): Promise<SettingsState> {
     this.state = createState({ ...this.state, sendPathEnabled });
     return this.state;
@@ -313,6 +318,24 @@ describe('App', () => {
     }));
 
     expect(await screen.findByText('The operation failed. No fallback was used.')).toBeVisible();
+  });
+
+  it('offers alphabetical sorting as an opt-in, with what it costs written next to it', async () => {
+    const user = userEvent.setup();
+    const client = new MemorySettingsClient();
+    render(<App settingsClient={client} permissionBridge={grantAll} />);
+    await screen.findByRole('heading', { name: 'Connect OpenAI' });
+
+    const checkbox = screen.getByRole('checkbox', {
+      name: 'Sort tabs alphabetically after applying',
+    });
+    expect(checkbox).not.toBeChecked();
+    // The order it replaces is gone for good, so the interface has to say so before it is on.
+    expect(screen.getByText(/undo cannot bring it back/)).toBeVisible();
+
+    await user.click(checkbox);
+
+    expect(client.state.sortTabsEnabled).toBe(true);
   });
 
   it('uses a high-contrast keyboard focus outline', async () => {

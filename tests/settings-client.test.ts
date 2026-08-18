@@ -22,6 +22,7 @@ describe('RuntimeSettingsClient', () => {
             baseUrlIsDefault: true,
             groupingGranularity: 'balanced',
             sendPathEnabled: false,
+            sortTabsEnabled: false,
             firstPageEnabled: true,
           },
         };
@@ -72,6 +73,7 @@ describe('RuntimeSettingsClient', () => {
             baseUrlIsDefault: true,
             groupingGranularity: 'balanced',
             sendPathEnabled: false,
+            sortTabsEnabled: false,
             firstPageEnabled: true,
           },
         };

@@ -16,6 +16,7 @@ export interface SettingsClient {
   setBaseUrl(baseUrl: string): Promise<SettingsState>;
   setGroupingGranularity(granularity: GroupingGranularity): Promise<SettingsState>;
   setSendPathEnabled(enabled: boolean): Promise<SettingsState>;
+  setSortTabsEnabled(enabled: boolean): Promise<SettingsState>;
   setFirstPageEnabled(enabled: boolean): Promise<SettingsState>;
 }
 
@@ -98,6 +99,14 @@ export class RuntimeSettingsClient implements SettingsClient {
     });
   }
 
+  async setSortTabsEnabled(enabled: boolean): Promise<SettingsState> {
+    return this.request({
+      type: 'settings/set-sort-tabs',
+      enabled,
+      systemLocale: this.readSystemLocale(),
+    });
+  }
+
   async setFirstPageEnabled(enabled: boolean): Promise<SettingsState> {
     return this.request({
       type: 'settings/set-first-page',
@@ -145,6 +154,7 @@ function isSettingsState(value: unknown): value is SettingsState {
     typeof value.baseUrlIsDefault === 'boolean' &&
     isGroupingGranularity(value.groupingGranularity) &&
     typeof value.sendPathEnabled === 'boolean' &&
+    typeof value.sortTabsEnabled === 'boolean' &&
     typeof value.firstPageEnabled === 'boolean'
   );
 }

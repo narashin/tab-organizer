@@ -430,7 +430,9 @@ describe('SynchronizationService', () => {
     // 3 chunks: the failing one is attempted twice, the other two once each.
     expect(attempts).toBe(4);
     expect(proposal.changes).toHaveLength(7);
-    expect(proposal.failedTabCount).toBe(5);
+    // Naming them is what lets a user see which tabs went unreviewed.
+    expect(proposal.failedTabs).toHaveLength(5);
+    expect(proposal.failedTabs.some((failed) => failed.tabId === 800)).toBe(true);
     expect(proposal.changes.some((change) => change.tabId === 800)).toBe(false);
   });
 
@@ -473,7 +475,7 @@ describe('SynchronizationService', () => {
     const proposal = await service.review('all');
 
     expect(proposal.changes).toHaveLength(6);
-    expect(proposal.failedTabCount).toBe(0);
+    expect(proposal.failedTabs).toEqual([]);
   });
 
   it('sends the path only when opted in, and never the query behind it', async () => {
@@ -1004,6 +1006,44 @@ describe('SynchronizationService', () => {
     );
     return service.review('all');
   };
+
+  it('sorts the windows it touched, but only when the setting asks for it', async () => {
+    const createSortingHarness = (sortEnabled: boolean) => {
+      const local = new MemoryStorage();
+      const session = new MemoryStorage();
+      const platform = new RecordingPlatform();
+      const moves: string[] = [];
+      const tabOrder = {
+        listWindowTabs: async (windowId: number) => platform.currentTabs
+          .filter((tab) => tab.windowId === windowId)
+          .map((tab, index) => ({
+            tabId: tab.tabId, index, pinned: false, groupId: -1, title: tab.title,
+          })),
+        moveTab: async (tabId: number, index: number) => { moves.push(`tab:${tabId}:${index}`); },
+        moveGroup: async (groupId: number, index: number) => { moves.push(`group:${groupId}:${index}`); },
+      };
+      const service = new SynchronizationService(
+        new RecordingClassifier(), new PresetStore(local, () => 'preset'),
+        new TabLockStore(session, () => 1), new HistoryStore(local, () => 'history', () => 1),
+        platform, () => 'en', () => 'sorted', session, undefined, undefined, undefined,
+        () => sortEnabled, tabOrder,
+      );
+      return { service, moves };
+    };
+
+    const off = createSortingHarness(false);
+    const offProposal = await off.service.review('current');
+    await off.service.apply(offProposal.id, [3, 4]);
+
+    // Default is off, and an extension that rearranges a window nobody asked it to is a bad guest.
+    expect(off.moves).toEqual([]);
+
+    const on = createSortingHarness(true);
+    const onProposal = await on.service.review('current');
+    await on.service.apply(onProposal.id, [3, 4]);
+
+    expect(on.moves.length).toBeGreaterThan(0);
+  });
 
   it('reports a run as in flight only while it is actually running', async () => {
     const { service } = createHarness();

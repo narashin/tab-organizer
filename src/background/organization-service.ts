@@ -4,6 +4,12 @@ import type { Preset, PresetDraft, PresetStore } from './preset-store';
 import type { SynchronizationProposal, SynchronizationService } from './synchronization-service';
 import type { TabLock, TabLockStore } from './tab-lock-store';
 
+export interface UndoOutcome {
+  state: OrganizationState;
+  restored: number;
+  skipped: number;
+}
+
 export interface OrganizationState {
   presets: Preset[];
   locks: TabLock[];
@@ -126,9 +132,15 @@ export class OrganizationService {
     return this.synchronization.apply(proposalId, selectedTabIds);
   }
 
-  async undo(operationId: string): Promise<OrganizationState> {
-    await this.restorer.undo(operationId);
-    return this.getState();
+  /**
+   * Reverts an operation and says how much of it could be reverted.
+   *
+   * The counts used to be discarded, so an undo that restored nothing looked exactly like one that
+   * restored everything.
+   */
+  async undo(operationId: string): Promise<UndoOutcome> {
+    const result = await this.restorer.undo(operationId);
+    return { state: await this.getState(), ...result };
   }
 }
 

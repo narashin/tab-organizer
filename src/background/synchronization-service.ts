@@ -14,6 +14,7 @@ import {
   maxGroupCount,
   type GroupingGranularity,
 } from '../shared/grouping';
+import { planTabOrder, type TabOrderPlatform } from './tab-order';
 import type { TabLockStore } from './tab-lock-store';
 import type { LocalStorageArea } from './settings-service';
 
@@ -84,13 +85,21 @@ export interface SynchronizationSkippedGroup {
   minimumTabs: number | null;
 }
 
+/** A tab the run could not classify, named so it can be found rather than merely counted. */
+export interface FailedTab {
+  tabId: number;
+  title: string;
+  hostname: string;
+}
+
 export interface SynchronizationProposal {
   id: string;
   scope: 'all' | 'current';
   changes: SynchronizationChange[];
   unchangedCount: number;
-  // Tabs whose chunk failed every attempt. They stay put, but silence would misreport coverage.
-  failedTabCount: number;
+  // Tabs whose chunk failed every attempt. They stay put, but silence would misreport coverage, and
+  // a bare count leaves the user with no way to tell which tabs went unreviewed.
+  failedTabs: FailedTab[];
   skippedGroups: SynchronizationSkippedGroup[];
   /**
    * Why the run had no plan to hold the chunks together, or null when it had one.
@@ -142,7 +151,36 @@ export class SynchronizationService {
     private readonly taxonomyPlanner?: TaxonomyPlanner,
     private readonly getGranularity: () => GroupingGranularity = () => DEFAULT_GROUPING_GRANULARITY,
     private readonly getSendPathEnabled: () => boolean = () => false,
+    private readonly getSortTabsEnabled: () => boolean = () => false,
+    private readonly tabOrder?: TabOrderPlatform,
   ) {}
+
+  /**
+   * Puts the windows this apply touched into alphabetical order, when the user asked for that.
+   *
+   * Runs after the moves rather than instead of them, and never fails the apply: the tabs are
+   * already where they belong, and a strip in the original order is a cosmetic loss. The previous
+   * order is not recorded, so undo restores groups and leaves the order alone.
+   */
+  private async sortWindows(windowIds: number[]): Promise<void> {
+    const platform = this.tabOrder;
+    if (platform === undefined || !this.getSortTabsEnabled()) return;
+    for (const windowId of windowIds) {
+      try {
+        const groups = await this.platform.listGroups(windowId);
+        const steps = planTabOrder(await platform.listWindowTabs(windowId), groups);
+        for (const step of steps) {
+          if (step.kind === 'group') {
+            await platform.moveGroup(step.groupId, step.index);
+          } else {
+            await platform.moveTab(step.tabId, step.index);
+          }
+        }
+      } catch {
+        // A window that refuses to be reordered keeps the order it had.
+      }
+    }
+  }
 
   // One bad chunk must not discard the rest of the window, so failures stay local and retry once.
   private async classifyChunk(
@@ -258,7 +296,7 @@ export class SynchronizationService {
       async (windowId): Promise<{
         changes: SynchronizationChange[];
         unchangedCount: number;
-        failedTabCount: number;
+        failedTabs: FailedTab[];
         skippedGroups: SynchronizationSkippedGroup[];
       }> => {
       const windowTabs = eligible.filter((tab) => tab.windowId === windowId);
@@ -301,10 +339,11 @@ export class SynchronizationService {
         ...cueDecisions,
         ...chunkedDecisions.flatMap((chunkResult) => chunkResult ?? []),
       ];
-      const failedTabCount = chunks.reduce(
-        (total, chunk, index) => total + (chunkedDecisions[index] === null ? chunk.length : 0),
-        0,
-      );
+      const failedTabs = chunks.flatMap((chunk, index) => chunkedDecisions[index] === null
+        ? chunk.map((tab) => ({
+          tabId: tab.tabId, title: tab.title, hostname: getHostname(tab.url),
+        }))
+        : []);
 
       const changes: SynchronizationChange[] = [];
       const canonicalTitles = new Map<string, string>();
@@ -368,7 +407,7 @@ export class SynchronizationService {
       return {
         changes: kept,
         unchangedCount: unchangedCount + (changes.length - kept.length),
-        failedTabCount,
+        failedTabs,
         skippedGroups: [...skippedGroups.values()],
       };
       },
@@ -379,14 +418,14 @@ export class SynchronizationService {
     }
     const changes = windowResults.flatMap((result) => result.changes);
     const unchangedCount = windowResults.reduce((total, result) => total + result.unchangedCount, 0);
-    const failedTabCount = windowResults.reduce((total, result) => total + result.failedTabCount, 0);
+    const failedTabs = windowResults.flatMap((result) => result.failedTabs);
     const skippedGroups = mergeSkippedGroups(
       windowResults.flatMap((result) => result.skippedGroups),
     );
 
     markSplitViewConflicts(changes);
     const proposal: SynchronizationProposal = {
-      id: this.createProposalId(), scope, changes, unchangedCount, failedTabCount, skippedGroups,
+      id: this.createProposalId(), scope, changes, unchangedCount, failedTabs, skippedGroups,
       planFailureReason: planFailures[0] ?? null,
     };
     this.proposals.clear();
@@ -586,6 +625,7 @@ export class SynchronizationService {
     }
     await this.history.markStatus(operation.id, applied === valid.length ? 'completed' : 'partial');
     await this.removeProposal(proposalId);
+    if (applied > 0) await this.sortWindows([...new Set(valid.map((change) => change.windowId))]);
     return { applied, skipped };
   }
 
@@ -1061,7 +1101,7 @@ function parseStoredProposal(value: unknown): StoredSynchronizationProposal | nu
 function parseProposal(value: Record<string, unknown>): SynchronizationProposal | null {
   if (
     typeof value.id !== 'string' || (value.scope !== 'all' && value.scope !== 'current') ||
-    typeof value.unchangedCount !== 'number' || typeof value.failedTabCount !== 'number' ||
+    typeof value.unchangedCount !== 'number' ||
     !Array.isArray(value.changes)
   ) {
     return null;
@@ -1076,15 +1116,26 @@ function parseProposal(value: Record<string, unknown>): SynchronizationProposal 
   if (skippedGroups.length !== rawSkipped.length) return null;
   const planFailureReason = value.planFailureReason ?? null;
   if (planFailureReason !== null && typeof planFailureReason !== 'string') return null;
+  // Same tolerance: a proposal stored before the failures were named carries only a count, which
+  // this version has no way to turn back into tabs.
+  const rawFailed = value.failedTabs ?? [];
+  if (!Array.isArray(rawFailed)) return null;
+  const failedTabs = rawFailed.filter(isFailedTab);
+  if (failedTabs.length !== rawFailed.length) return null;
   return {
     id: value.id,
     scope: value.scope,
     changes,
     unchangedCount: value.unchangedCount,
-    failedTabCount: value.failedTabCount,
+    failedTabs,
     skippedGroups,
     planFailureReason,
   };
+}
+
+function isFailedTab(value: unknown): value is FailedTab {
+  return isRecord(value) && typeof value.tabId === 'number' && typeof value.title === 'string' &&
+    typeof value.hostname === 'string';
 }
 
 function isSkippedGroup(value: unknown): value is SynchronizationSkippedGroup {

@@ -43,6 +43,7 @@ export interface SettingsState {
   baseUrlIsDefault: boolean;
   groupingGranularity: GroupingGranularity;
   sendPathEnabled: boolean;
+  sortTabsEnabled: boolean;
   firstPageEnabled: boolean;
 }
 
@@ -53,6 +54,7 @@ export interface OrganizationRuntimeConfig {
   baseUrl: string;
   groupingGranularity: GroupingGranularity;
   sendPathEnabled: boolean;
+  sortTabsEnabled: boolean;
   firstPageEnabled: boolean;
   locale: SupportedLocale;
   enabled: boolean;
@@ -76,6 +78,7 @@ interface StoredSettings {
   providers: Record<Provider, StoredProviderSettings>;
   groupingGranularity: GroupingGranularity;
   sendPathEnabled: boolean;
+  sortTabsEnabled: boolean;
   firstPageEnabled: boolean;
 }
 
@@ -126,6 +129,7 @@ function parseStoredSettings(value: unknown): StoredSettings {
     providers: createProviderRecord(createDefaultProviderSettings),
     groupingGranularity: DEFAULT_GROUPING_GRANULARITY,
     sendPathEnabled: false,
+    sortTabsEnabled: false,
     firstPageEnabled: true,
   };
   if (typeof value !== 'object' || value === null) return defaults;
@@ -152,6 +156,7 @@ function parseStoredSettings(value: unknown): StoredSettings {
     groupingGranularity: isGroupingGranularity(candidate.groupingGranularity)
       ? candidate.groupingGranularity
       : defaults.groupingGranularity,
+    sortTabsEnabled: candidate.sortTabsEnabled === true,
     sendPathEnabled: candidate.sendPathEnabled === true,
     firstPageEnabled: typeof candidate.firstPageEnabled === 'boolean'
       ? candidate.firstPageEnabled
@@ -208,6 +213,7 @@ export class SettingsService {
       baseUrl: state.baseUrl,
       groupingGranularity: state.groupingGranularity,
       sendPathEnabled: state.sendPathEnabled,
+      sortTabsEnabled: state.sortTabsEnabled,
       firstPageEnabled: state.firstPageEnabled,
       locale: state.locale,
       enabled: state.organizationEnabled,
@@ -346,6 +352,18 @@ export class SettingsService {
     });
   }
 
+  async setSortTabsEnabled(
+    sortTabsEnabled: boolean,
+    systemLocale: string,
+  ): Promise<SettingsState> {
+    return this.mutate(async (settings) => {
+      await this.storage.set({
+        [SETTINGS_KEY]: { ...settings, sortTabsEnabled } satisfies StoredSettings,
+      });
+      return this.getState(systemLocale);
+    });
+  }
+
   async setFirstPageEnabled(
     firstPageEnabled: boolean,
     systemLocale: string,
@@ -412,6 +430,7 @@ export class SettingsService {
       baseUrlIsDefault: active.baseUrl === PROVIDER_PROFILES[provider].defaultBaseUrl,
       groupingGranularity: settings.groupingGranularity,
       sendPathEnabled: settings.sendPathEnabled,
+      sortTabsEnabled: settings.sortTabsEnabled,
       firstPageEnabled: settings.firstPageEnabled,
     };
   }

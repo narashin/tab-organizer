@@ -28,6 +28,7 @@ export type BackgroundRequest =
   | { type: 'settings/set-base-url'; baseUrl: string; systemLocale: string }
   | { type: 'settings/set-grouping'; granularity: string; systemLocale: string }
   | { type: 'settings/set-send-path'; enabled: boolean; systemLocale: string }
+  | { type: 'settings/set-sort-tabs'; enabled: boolean; systemLocale: string }
   | { type: 'settings/set-first-page'; enabled: boolean; systemLocale: string };
 
 export type SettingsMessageHandler = (message: unknown) => Promise<BackgroundResponse>;
@@ -90,7 +91,7 @@ function isBackgroundRequest(value: unknown): value is BackgroundRequest {
     return typeof value.granularity === 'string';
   }
 
-  if (value.type === 'settings/set-send-path') {
+  if (value.type === 'settings/set-send-path' || value.type === 'settings/set-sort-tabs') {
     return typeof value.enabled === 'boolean';
   }
 
@@ -124,6 +125,8 @@ async function handleRequest(
       return settingsService.setGroupingGranularity(request.granularity, request.systemLocale);
     case 'settings/set-send-path':
       return settingsService.setSendPathEnabled(request.enabled, request.systemLocale);
+    case 'settings/set-sort-tabs':
+      return settingsService.setSortTabsEnabled(request.enabled, request.systemLocale);
     case 'settings/set-first-page':
       return settingsService.setFirstPageEnabled(request.enabled, request.systemLocale);
   }

@@ -31,12 +31,14 @@ export function createChromeOrganizationHandler(settings: SettingsService) {
   let locale: SupportedLocale = 'en';
   let granularity: GroupingGranularity = DEFAULT_GROUPING_GRANULARITY;
   let sendPathEnabled = false;
+  let sortTabsEnabled = false;
 
   const resolveClassifier = async (): Promise<Classifier> => {
     const config = await settings.getOrganizationRuntimeConfig(chrome.i18n.getUILanguage());
     locale = config.locale;
     granularity = config.groupingGranularity;
     sendPathEnabled = config.sendPathEnabled;
+    sortTabsEnabled = config.sortTabsEnabled;
     if (!config.enabled || config.apiKey === null) throw new Error('organization_disabled');
     const classifier = createClassifier(config.provider, {
       apiKey: config.apiKey, model: config.model, baseUrl: config.baseUrl,
@@ -78,6 +80,8 @@ export function createChromeOrganizationHandler(settings: SettingsService) {
     dynamicTaxonomyPlanner,
     () => granularity,
     () => sendPathEnabled,
+    () => sortTabsEnabled,
+    chromeTabs,
   );
   const restorer = new HistoryRestorer(history, historyPlatform);
   const service = new OrganizationService(

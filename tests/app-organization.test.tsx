@@ -27,7 +27,8 @@ class ReadySettingsClient implements SettingsClient {
     providerKeys: { openai: true, anthropic: false, google: false },
     apiKeyStatus: 'valid', apiKeyConfigured: true,
     organizationEnabled: true, model: 'gpt-5.6', baseUrl: 'https://api.openai.com/v1',
-    baseUrlIsDefault: true, groupingGranularity: 'balanced', sendPathEnabled: false, firstPageEnabled: true,
+    baseUrlIsDefault: true, groupingGranularity: 'balanced', sendPathEnabled: false,
+    sortTabsEnabled: false, firstPageEnabled: true,
   };
   async getState() { return this.state; }
   async setLocale(localeSelection: LocaleSelection) { this.state = { ...this.state, localeSelection, locale: localeSelection === 'system' ? 'en' : localeSelection }; return this.state; }
@@ -38,6 +39,7 @@ class ReadySettingsClient implements SettingsClient {
   async setBaseUrl(baseUrl: string) { this.state = { ...this.state, baseUrl, baseUrlIsDefault: false }; return this.state; }
   async setGroupingGranularity(groupingGranularity: GroupingGranularity) { this.state = { ...this.state, groupingGranularity }; return this.state; }
   async setSendPathEnabled(sendPathEnabled: boolean) { this.state = { ...this.state, sendPathEnabled }; return this.state; }
+  async setSortTabsEnabled(sortTabsEnabled: boolean) { this.state = { ...this.state, sortTabsEnabled }; return this.state; }
   async setFirstPageEnabled(firstPageEnabled: boolean) { this.state = { ...this.state, firstPageEnabled }; return this.state; }
 }
 
@@ -68,7 +70,12 @@ class MemoryOrganizationClient implements OrganizationClient {
     return this.state;
   }
   async lockActiveTab() { return this.state; }
-  async lockTab(tabId: number) { this.lockedIds.push(tabId); return this.state; }
+  async lockTab(tabId: number) {
+    this.lockedIds.push(tabId);
+    // The real service answers with the lock in place, which is what the review list reads.
+    this.state = { ...this.state, locks: [...this.state.locks, { tabId, lockedAt: 1, changed: false }] };
+    return this.state;
+  }
   async unlockTab(tabId: number) {
     this.state = { ...this.state, locks: this.state.locks.filter((lock) => lock.tabId !== tabId) };
     return this.state;
@@ -81,7 +88,7 @@ class MemoryOrganizationClient implements OrganizationClient {
   }
   async review(): Promise<SynchronizationProposal> {
     return {
-      id: 'proposal-1', scope: 'current', unchangedCount: 2, failedTabCount: 0, skippedGroups: [], planFailureReason: null,
+      id: 'proposal-1', scope: 'current', unchangedCount: 2, failedTabs: [], skippedGroups: [], planFailureReason: null,
       changes: [
         { tabId: 1, windowId: 3, title: 'Normal', hostname: 'normal.test', currentGroup: null, currentGroupId: -1,
           target: { kind: 'new_group', ref: null, groupId: null, title: 'Work', color: 'grey', description: 'Work tabs' },
@@ -99,6 +106,7 @@ class MemoryOrganizationClient implements OrganizationClient {
       ? { applied: selectedTabIds.length, skipped: 0 }
       : this.applyResult;
   }
+  undoOutcome = { restored: 1, skipped: 0 };
   async undo(operationId: string) {
     this.undoneIds.push(operationId);
     this.state = {
@@ -107,7 +115,7 @@ class MemoryOrganizationClient implements OrganizationClient {
         ? { ...operation, undoneAt: 200 }
         : operation),
     };
-    return this.state;
+    return { state: this.state, ...this.undoOutcome };
   }
 }
 
@@ -126,7 +134,7 @@ class GroupProposalOrganizationClient extends MemoryOrganizationClient {
 class ConflictOrganizationClient extends MemoryOrganizationClient {
   override async review(): Promise<SynchronizationProposal> {
     return {
-      id: 'conflict', scope: 'current', unchangedCount: 0, failedTabCount: 0, skippedGroups: [], planFailureReason: null,
+      id: 'conflict', scope: 'current', unchangedCount: 0, failedTabs: [], skippedGroups: [], planFailureReason: null,
       changes: [
         { tabId: 11, windowId: 3, title: 'Split left', hostname: 'left.test', currentGroup: null,
           currentGroupId: -1, target: { kind: 'new_group', ref: null, groupId: null, title: 'Left group', color: 'grey', description: null },
@@ -303,10 +311,34 @@ describe('App organization flows', () => {
     const workDetails = workSummary.closest('details');
     if (workDetails === null) throw new Error('work_details_missing');
     await user.click(within(workDetails).getByRole('button', { name: 'Save as preset' }));
+
+    // Saying so is what stops the second click; without it the same preset was created again.
+    const saved = await within(workDetails).findByRole('button', { name: 'Saved as preset' });
+    expect(saved).toBeDisabled();
+
     await user.click(screen.getByRole('button', { name: 'Presets' }));
 
     expect(await screen.findByText('Work')).toBeVisible();
     expect(screen.getByText('Work tabs')).toBeVisible();
+  });
+
+  it('creates one preset however often the group button is pressed', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(screen.getByRole('button', { name: 'Sync current window' }));
+    const workSummary = screen.getByText(/Work \(/);
+    await user.click(workSummary);
+    const workDetails = workSummary.closest('details');
+    if (workDetails === null) throw new Error('work_details_missing');
+
+    const button = within(workDetails).getByRole('button', { name: 'Save as preset' });
+    await user.click(button);
+    await user.click(button);
+    await user.click(button);
+
+    expect(organization.state.presets).toHaveLength(1);
   });
 
   it('shows Split View as blocked and applies only selected eligible changes', async () => {
@@ -464,6 +496,53 @@ describe('App organization flows', () => {
     expect(screen.getByRole('button', { name: 'Apply selected (2)' })).toBeEnabled();
   });
 
+  it('names the tabs a review could not classify instead of only counting them', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    const pending = await organization.review();
+    organization.pendingProposal = {
+      ...pending,
+      failedTabs: [
+        { tabId: 21, title: 'Quarterly report', hostname: 'reports.test' },
+        { tabId: 22, title: 'Release checklist', hostname: 'wiki.test' },
+      ],
+    };
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Review' }));
+    await user.click(await screen.findByText('Tabs that could not be reviewed (2)'));
+
+    expect(screen.getByText('Quarterly report')).toBeVisible();
+    expect(screen.getByText('reports.test')).toBeVisible();
+    expect(screen.getByText('Release checklist')).toBeVisible();
+  });
+
+  it('reports what an undo put back, and explains what it left alone', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    organization.state = {
+      ...organization.state,
+      history: [{
+        id: 'history-1', kind: 'sync', createdAt: 100,
+        tabs: [{ tabId: 1, windowId: 3, group: null }], undoneAt: null,
+      }],
+    };
+    // An undo that puts back almost nothing used to look exactly like one that put back everything.
+    organization.undoOutcome = { restored: 1, skipped: 4 };
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'History' }));
+
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+
+    // The operation notice is also a status region, so this picks the one that reports counts.
+    const outcome = (await screen.findAllByRole('status'))
+      .find((element) => element.textContent?.includes('Restored'));
+    if (outcome === undefined) throw new Error('the undo outcome was never reported');
+    expect(outcome).toHaveTextContent('Restored: 1 · Skipped: 4');
+    // The reasons live in tab state the user cannot see from the history list.
+    expect(within(outcome).getByRole('note')).toHaveAccessibleName(/moved to another window/);
+  });
+
   it('says when the run had no grouping plan, since that is why the groups came out small', async () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
@@ -577,6 +656,10 @@ describe('App organization flows', () => {
 
     expect(organization.lockedIds).toEqual([1]);
     expect(screen.getByText('Selected changes: 0')).toBeVisible();
+    expect(await screen.findByText(/Locked, so this run leaves it alone/)).toBeVisible();
+    // Re-ticking it would have been silently ignored at apply time, so it cannot be re-ticked.
+    expect(screen.getAllByRole('checkbox')[0]).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Lock Normal' })).toBeNull();
   });
 
   it('rejects every eligible change in a proposed group at once', async () => {
@@ -802,7 +885,7 @@ describe('App organization flows', () => {
         tabs: [{ tabId: 1, windowId: 3, group: null }], undoneAt: null,
       }],
     };
-    let resolveUndo: ((state: OrganizationState) => void) | undefined;
+    let resolveUndo: ((outcome: { state: OrganizationState; restored: number; skipped: number }) => void) | undefined;
     organization.undo = async (operationId) => {
       organization.undoneIds.push(operationId);
       return new Promise((resolve) => { resolveUndo = resolve; });
@@ -816,10 +899,39 @@ describe('App organization flows', () => {
     await user.click(undo);
     expect(organization.undoneIds).toEqual(['history-1']);
     resolveUndo?.({
-      ...organization.state,
-      history: organization.state.history.map((operation) => ({ ...operation, undoneAt: 200 })),
+      state: {
+        ...organization.state,
+        history: organization.state.history.map((operation) => ({ ...operation, undoneAt: 200 })),
+      },
+      restored: 1,
+      skipped: 0,
     });
     expect(await screen.findByRole('button', { name: 'Undone' })).toBeDisabled();
+  });
+
+  it('accepts a proposal in the shape the background actually sends', async () => {
+    // The client validates every proposal, so a field renamed on one side and not the other rejects
+    // every review. Only the end-to-end run caught that; this keeps the two shapes tied together.
+    const proposal: SynchronizationProposal = {
+      id: 'proposal-1',
+      scope: 'current',
+      unchangedCount: 0,
+      failedTabs: [{ tabId: 9, title: 'Unreviewed', hostname: 'slow.test' }],
+      skippedGroups: [{ title: 'Reading', tabCount: 1, reason: 'too_few_tabs', minimumTabs: 4 }],
+      planFailureReason: null,
+      changes: [{
+        tabId: 1, windowId: 3, title: 'Normal', hostname: 'normal.test', currentGroup: null,
+        currentGroupId: -1, confidence: 0.9, reason: 'Related', selected: true,
+        blockedReason: null, splitViewId: null,
+        target: {
+          kind: 'new_group', ref: null, groupId: null, title: 'Work', color: 'blue',
+          description: null,
+        },
+      }],
+    };
+    const client = new RuntimeOrganizationClient(async () => ({ ok: true, proposal }));
+
+    await expect(client.review('current')).resolves.toMatchObject({ id: 'proposal-1' });
   });
 
   it('rejects malformed successful organization responses', async () => {

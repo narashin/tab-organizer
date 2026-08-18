@@ -14,6 +14,13 @@ export interface ReviewStatus {
   reviewing: boolean;
 }
 
+/** What an undo managed to put back, and what it had to leave alone. */
+export interface UndoResult {
+  state: OrganizationState;
+  restored: number;
+  skipped: number;
+}
+
 export interface OrganizationClient {
   getState(): Promise<OrganizationState>;
   createPreset(draft: PresetDraft): Promise<OrganizationState>;
@@ -27,7 +34,7 @@ export interface OrganizationClient {
   review(scope: 'all' | 'current'): Promise<SynchronizationProposal>;
   reviewStatus(): Promise<ReviewStatus>;
   apply(proposalId: string, selectedTabIds: number[]): Promise<{ applied: number; skipped: number }>;
-  undo(operationId: string): Promise<OrganizationState>;
+  undo(operationId: string): Promise<UndoResult>;
 }
 
 export type OrganizationRuntimeMessenger = (request: OrganizationRequest) => Promise<unknown>;
@@ -44,7 +51,14 @@ export class RuntimeOrganizationClient implements OrganizationClient {
   unlockTab(tabId: number) { return this.requestState({ type: 'locks/unlock', tabId }); }
   unlockAndAnalyze(tabId: number) { return this.requestState({ type: 'locks/unlock-and-analyze', tabId }); }
   retryFirstPage(tabId: number) { return this.requestState({ type: 'automatic/retry', tabId }); }
-  undo(operationId: string) { return this.requestState({ type: 'history/undo', operationId }); }
+
+  async undo(operationId: string): Promise<UndoResult> {
+    const response = await this.request({ type: 'history/undo', operationId });
+    if (!isOrganizationState(response.state) || !isUndoCounts(response.undoResult)) {
+      throw new Error('organization_request_failed');
+    }
+    return { state: response.state, ...response.undoResult };
+  }
 
   async review(scope: 'all' | 'current'): Promise<SynchronizationProposal> {
     const response = await this.request({ type: 'sync/review', scope });
@@ -96,7 +110,13 @@ function isSynchronizationProposal(value: unknown): value is SynchronizationProp
   return isRecord(value) && typeof value.id === 'string' &&
     (value.scope === 'all' || value.scope === 'current') &&
     Array.isArray(value.changes) && value.changes.every(isSynchronizationChange) &&
-    typeof value.unchangedCount === 'number' && typeof value.failedTabCount === 'number';
+    typeof value.unchangedCount === 'number' &&
+    Array.isArray(value.failedTabs) && value.failedTabs.every(isFailedTab);
+}
+
+function isFailedTab(value: unknown): boolean {
+  return isRecord(value) && typeof value.tabId === 'number' && typeof value.title === 'string' &&
+    typeof value.hostname === 'string';
 }
 
 function isSynchronizationChange(value: unknown): boolean {
@@ -115,6 +135,10 @@ function isSynchronizationChange(value: unknown): boolean {
     (value.target.groupId === null || typeof value.target.groupId === 'number') &&
     typeof value.target.title === 'string' && isGroupColor(value.target.color) &&
     (value.target.description === null || typeof value.target.description === 'string');
+}
+
+function isUndoCounts(value: unknown): value is { restored: number; skipped: number } {
+  return isRecord(value) && typeof value.restored === 'number' && typeof value.skipped === 'number';
 }
 
 function isApplyResult(value: unknown): value is { applied: number; skipped: number } {

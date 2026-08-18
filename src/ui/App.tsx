@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent
 
 import type { OrganizationState } from '../background/organization-service';
 import { undoableOperationId } from '../background/history-store';
+import { normalizeGroupTitle } from '../background/synchronization-service';
 import type { GroupColor, PresetDraft } from '../background/preset-store';
 import type { SettingsState } from '../background/settings-service';
 import type { SynchronizationProposal } from '../background/synchronization-service';
@@ -97,6 +98,8 @@ export function App({
   const [isApplying, setIsApplying] = useState(false);
   const [isPresetSubmitting, setIsPresetSubmitting] = useState(false);
   const [undoingOperationId, setUndoingOperationId] = useState<string | null>(null);
+  const [undoResult, setUndoResult] = useState<{ restored: number; skipped: number } | null>(null);
+  const [savingPresetTitle, setSavingPresetTitle] = useState<string | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
   const [organizationLoadFailed, setOrganizationLoadFailed] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
@@ -176,6 +179,9 @@ export function App({
     document.documentElement.lang = locale;
   }, [locale]);
   const selectedCount = proposal?.changes.filter((change) => change.selected && change.blockedReason === null).length ?? 0;
+  // Locking a tab that a pending review wants to move is a contradiction the apply path resolves in
+  // favour of the lock. The review list says so rather than letting the row be selected again.
+  const lockedTabIds = new Set((organization?.locks ?? []).map((lock) => lock.tabId));
   const organizationUnavailable = organizationClient !== undefined && organization === null;
   const tabSummaries = new Map(
     (organization?.tabSummaries ?? []).map((summary) => [summary.tabId, summary]),
@@ -494,10 +500,25 @@ export function App({
                       ? text.reviewScopeAll
                       : text.reviewScopeCurrent} · {text.unchangedCount}: {proposal.unchangedCount}
                   </p>
-                  {proposal.failedTabCount > 0 ? (
-                    <p className="banner banner--warning" role="status">
-                      {text.failedTabCount}: {proposal.failedTabCount}
-                    </p>
+                  {/* Named rather than counted: these tabs were never classified, so the only way
+                      to act on them is to know which ones they are. */}
+                  {proposal.failedTabs.length > 0 ? (
+                    <details className="group">
+                      <summary className="group__summary">
+                        <span className="swatch swatch--grey" aria-hidden="true" />
+                        <span className="group__label">
+                          {`${text.failedTabCount} (${proposal.failedTabs.length})`}
+                        </span>
+                      </summary>
+                      <div className="group__body">
+                        {proposal.failedTabs.map((failed) => (
+                          <span key={failed.tabId} className="row__main">
+                            <span className="row__title">{failed.title}</span>
+                            <span className="row__meta">{failed.hostname}</span>
+                          </span>
+                        ))}
+                      </div>
+                    </details>
                   ) : null}
                   {proposal.planFailureReason === null ? null : (
                     <p className="banner banner--warning" role="status">
@@ -545,9 +566,16 @@ export function App({
                     const summary = `${label}${windowSuffix} (${changes.length})`;
                     // Blocked rows cannot be selected at all, so they must not decide what the
                     // group-wide control does.
-                    const selectable = changes.filter((change) => change.blockedReason === null);
+                    const selectable = changes.filter(
+                      (change) => change.blockedReason === null && !lockedTabIds.has(change.tabId),
+                    );
                     const allSelected = selectable.length > 0 &&
                       selectable.every((change) => change.selected);
+                    // A preset created from this group is what the button has to notice; the
+                    // proposal itself keeps saying new_group until the next review.
+                    const savedAsPreset = (organization?.presets ?? []).some(
+                      (preset) => normalizeGroupTitle(preset.name) === normalizeGroupTitle(firstChange.target.title),
+                    );
                     const toggleAll = (selected: boolean) => setProposal({
                       ...proposal,
                       changes: proposal.changes.map((item) => selectable.some((change) => change.tabId === item.tabId)
@@ -583,8 +611,9 @@ export function App({
                                 <label className="check-row">
                                   <input
                                     type="checkbox"
-                                    checked={change.selected}
-                                    disabled={change.blockedReason !== null || isReviewing || isApplying}
+                                    checked={change.selected && !lockedTabIds.has(change.tabId)}
+                                    disabled={change.blockedReason !== null || isReviewing ||
+                                      isApplying || lockedTabIds.has(change.tabId)}
                                     onChange={(event) => setProposal({
                                       ...proposal,
                                       changes: proposal.changes.map((item) => item.tabId === change.tabId
@@ -602,7 +631,14 @@ export function App({
                                 </label>
                                 {/* One repeated action per row, so it is drawn rather than spelled out.
                                     The tab it acts on lives in the accessible name instead. */}
-                                {change.blockedReason === null ? (
+                                {/* The marker stays after locking, filled instead of outlined, so the
+                                    row reads as locked rather than as a button that vanished. */}
+                                {lockedTabIds.has(change.tabId) ? (
+                                  <span className="row__lock" title={text.lockedExcluded}>
+                                    <LockIcon />
+                                  </span>
+                                ) : null}
+                                {change.blockedReason === null && !lockedTabIds.has(change.tabId) ? (
                                   <button
                                     type="button"
                                     className="btn btn--ghost btn--icon"
@@ -630,6 +666,9 @@ export function App({
                               {change.blockedReason !== null ? (
                                 <p className="field__note">{text.splitViewBlocked}</p>
                               ) : null}
+                              {lockedTabIds.has(change.tabId) ? (
+                                <p className="field__note">{text.lockedExcluded}</p>
+                              ) : null}
                             </div>
                           ))}
 
@@ -640,21 +679,32 @@ export function App({
                           ) : null}
                           {firstChange.target.kind === 'new_group' ? (
                             <div className="group__actions">
+                              {/* Saving twice used to make a second preset with the same name: the
+                                  button said nothing about what it had already done, so it read as
+                                  a click that missed. */}
                               <button
                                 type="button"
                                 className="btn btn--soft btn--sm"
-                                disabled={isReviewing || isApplying}
-                                onClick={() => void run(async () => {
-                                  if (organizationClient === undefined) return;
-                                  setOrganization(await organizationClient.createPreset({
-                                    name: firstChange.target.title,
-                                    description: firstChange.target.description ?? firstChange.reason,
-                                    cues: [],
-                                    color: firstChange.target.color,
-                                  }));
-                                })}
+                                disabled={isReviewing || isApplying || savedAsPreset ||
+                                  savingPresetTitle !== null}
+                                onClick={() => {
+                                  if (organizationClient === undefined || savingPresetTitle !== null) return;
+                                  setSavingPresetTitle(firstChange.target.title);
+                                  void run(async () => {
+                                    try {
+                                      setOrganization(await organizationClient.createPreset({
+                                        name: firstChange.target.title,
+                                        description: firstChange.target.description ?? firstChange.reason,
+                                        cues: [],
+                                        color: firstChange.target.color,
+                                      }));
+                                    } finally {
+                                      setSavingPresetTitle(null);
+                                    }
+                                  });
+                                }}
                               >
-                                {text.saveAsPreset}
+                                {savedAsPreset ? text.savedAsPreset : text.saveAsPreset}
                               </button>
                             </div>
                           ) : null}
@@ -881,6 +931,24 @@ export function App({
               {(organization?.history ?? []).length === 0
                 ? <p className="empty">{text.noHistory}</p>
                 : <p className="field__note">{text.undoLatestOnly}</p>}
+              {/* An undo can put back nothing at all, and the outcome used to be invisible. The
+                  skipped count carries its own explanation because the reasons live in tab state
+                  the user cannot see from here. */}
+              {undoResult === null ? null : (
+                <p className="banner banner--info" role="status">
+                  {text.undoRestored}: {undoResult.restored} · {text.undoSkipped}: {undoResult.skipped}
+                  {' '}
+                  <span
+                    className="hint"
+                    tabIndex={0}
+                    role="note"
+                    aria-label={text.undoSkippedHint}
+                    title={text.undoSkippedHint}
+                  >
+                    ?
+                  </span>
+                </p>
+              )}
             </section>
 
             {organization?.history.map((operation) => (
@@ -902,7 +970,9 @@ export function App({
                       setUndoingOperationId(operation.id);
                       void run(async () => {
                         try {
-                          setOrganization(await organizationClient.undo(operation.id));
+                          const outcome = await organizationClient.undo(operation.id);
+                          setOrganization(outcome.state);
+                          setUndoResult({ restored: outcome.restored, skipped: outcome.skipped });
                         } finally {
                           setUndoingOperationId(null);
                         }
@@ -1070,6 +1140,19 @@ export function App({
                 {text.sendPathLabel}
               </label>
               <p id="send-path-note" className="field__note">{text.sendPathNotice}</p>
+
+              <label className="checkbox-label">
+                <input
+                  type="checkbox"
+                  aria-describedby="sort-tabs-note"
+                  checked={settings.sortTabsEnabled}
+                  onChange={(event) => void run(async () => {
+                    setSettings(await settingsClient.setSortTabsEnabled(event.currentTarget.checked));
+                  })}
+                />
+                {text.sortTabsLabel}
+              </label>
+              <p id="sort-tabs-note" className="field__note">{text.sortTabsNotice}</p>
 
               <label className="checkbox-label">
                 <input

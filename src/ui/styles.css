@@ -684,6 +684,37 @@ select {
   gap: var(--space-2);
 }
 
+/* A locked row keeps the same shape as an unlocked one, so the strip does not jump when the button
+   is replaced by the state it produced. */
+.row__lock {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  color: var(--color-fg);
+  place-items: center;
+}
+
+/* A question mark that carries its explanation in a tooltip. Focusable, because a hover-only
+   explanation is no explanation for anyone using a keyboard. */
+.hint {
+  display: inline-grid;
+  width: 16px;
+  height: 16px;
+  color: var(--color-fg-muted);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  place-items: center;
+  font-size: 10px;
+  font-weight: 700;
+  cursor: help;
+}
+
+.hint:focus-visible {
+  outline: 3px solid #222222;
+  outline-offset: 2px;
+}
+
 /* Group-wide actions sit away from the checkbox column so they cannot be mistaken for a row. */
 .group__actions {
   display: flex;

@@ -58,6 +58,7 @@ describe('settings message handler', () => {
         baseUrlIsDefault: true,
         groupingGranularity: 'balanced',
         sendPathEnabled: false,
+        sortTabsEnabled: false,
         firstPageEnabled: true,
       },
     } satisfies BackgroundResponse);

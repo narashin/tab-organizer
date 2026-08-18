@@ -49,6 +49,7 @@ describe('SettingsService', () => {
       baseUrlIsDefault: true,
       groupingGranularity: 'balanced',
       sendPathEnabled: false,
+      sortTabsEnabled: false,
       firstPageEnabled: true,
     });
     expect('openAiApiKey' in state).toBe(false);
@@ -83,6 +84,7 @@ describe('SettingsService', () => {
         },
         groupingGranularity: 'balanced',
         sendPathEnabled: false,
+        sortTabsEnabled: false,
         firstPageEnabled: true,
       },
     });
@@ -99,6 +101,7 @@ describe('SettingsService', () => {
       baseUrlIsDefault: true,
       groupingGranularity: 'balanced',
       sendPathEnabled: false,
+      sortTabsEnabled: false,
       firstPageEnabled: true,
     });
     expect(JSON.stringify(state)).not.toContain('sk-project-valid');
@@ -138,6 +141,7 @@ describe('SettingsService', () => {
       },
       groupingGranularity: 'balanced',
       sendPathEnabled: false,
+      sortTabsEnabled: false,
       firstPageEnabled: true,
     });
   });
@@ -202,6 +206,19 @@ describe('SettingsService', () => {
       firstPageEnabled: false,
       organizationEnabled: true,
     });
+  });
+
+  it('keeps alphabetical sorting off until it is turned on, and remembers it after', async () => {
+    const storage = new MemoryStorage();
+    const service = new SettingsService(storage, async () => ({ status: 'valid' }));
+
+    // Rearranging a window nobody asked to have rearranged is not a reasonable default.
+    expect((await service.getState('en-US')).sortTabsEnabled).toBe(false);
+
+    await service.setSortTabsEnabled(true, 'en-US');
+
+    expect((await service.getState('en-US')).sortTabsEnabled).toBe(true);
+    expect((await service.getOrganizationRuntimeConfig('en-US')).sortTabsEnabled).toBe(true);
   });
 
   it('does not replace a valid key when its validation status cannot be stored', async () => {

@@ -8,10 +8,30 @@ import type {
 import type { ActiveTabPlatform } from './organization-service';
 import type { GroupColor, PresetStore } from './preset-store';
 import type { SynchronizationPlatform } from './synchronization-service';
+import type { OrderedTab, TabOrderPlatform } from './tab-order';
 import type { TabLockStore } from './tab-lock-store';
 import type { SettingsService } from './settings-service';
 
-export class ChromeSynchronizationPlatform implements SynchronizationPlatform {
+export class ChromeSynchronizationPlatform implements SynchronizationPlatform, TabOrderPlatform {
+  async listWindowTabs(windowId: number): Promise<OrderedTab[]> {
+    return (await chrome.tabs.query({ windowId })).flatMap((tab) => tab.id === undefined ? [] : [{
+      tabId: tab.id,
+      index: tab.index,
+      pinned: tab.pinned,
+      groupId: tab.groupId,
+      title: tab.title ?? '',
+      ...(splitViewIdOf(tab) === undefined ? {} : { splitViewId: splitViewIdOf(tab) }),
+    }]);
+  }
+
+  async moveTab(tabId: number, index: number): Promise<void> {
+    await chrome.tabs.move(tabId, { index });
+  }
+
+  async moveGroup(groupId: number, index: number): Promise<void> {
+    await chrome.tabGroups.move(groupId, { index });
+  }
+
   async listTabs(scope: 'all' | 'current') {
     if (scope === 'current') {
       return (await chrome.tabs.query({ currentWindow: true })).map(toBrowserTab).filter(isDefined);
@@ -328,6 +348,14 @@ function toOrganizableTab(tab: chrome.tabs.Tab): OrganizableTab | null {
       ? {}
       : { splitViewId: extended.splitViewId }),
   };
+}
+
+/** Split View is newer than the typings, so the field is read off the tab rather than declared. */
+function splitViewIdOf(tab: chrome.tabs.Tab): number | undefined {
+  const extended = tab as chrome.tabs.Tab & { splitViewId?: number };
+  return extended.splitViewId === undefined || extended.splitViewId < 0
+    ? undefined
+    : extended.splitViewId;
 }
 
 function toGroupColor(color: GroupColor): GroupColor {

@@ -22,6 +22,7 @@ export interface OrganizationResponse {
   state?: OrganizationState;
   proposal?: SynchronizationProposal;
   reviewing?: boolean;
+  undoResult?: { restored: number; skipped: number };
   applyResult?: { applied: number; skipped: number };
   error?: 'invalid_request' | 'operation_failed';
 }
@@ -62,8 +63,10 @@ export function createOrganizationMessageHandler(service: OrganizationService): 
         }
         case 'sync/apply':
           return { ok: true, applyResult: await service.apply(message.proposalId, message.selectedTabIds) };
-        case 'history/undo':
-          return { ok: true, state: await service.undo(message.operationId) };
+        case 'history/undo': {
+          const { state, ...undoResult } = await service.undo(message.operationId);
+          return { ok: true, state, undoResult };
+        }
       }
     } catch {
       return { ok: false, error: 'operation_failed' };
