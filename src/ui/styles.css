@@ -684,6 +684,35 @@ select {
   gap: var(--space-2);
 }
 
+/* A row whose whole body is one selectable label needs no action column. */
+.row--select {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* A preset row carries a grip ahead of the swatch, so it has one more column than a plain row. */
+.row--preset {
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+}
+
+/* The grip is the only part of a preset row that starts a drag, so it looks grabbable and keeps a
+   focus ring for the keyboard path. */
+.row__grip {
+  display: inline-grid;
+  width: 20px;
+  height: 24px;
+  color: var(--color-fg-muted);
+  place-items: center;
+  cursor: grab;
+}
+
+.row__grip:hover {
+  color: var(--color-fg);
+}
+
+.row--dragging {
+  opacity: 0.5;
+}
+
 /* A locked row keeps the same shape as an unlocked one, so the strip does not jump when the button
    is replaced by the state it produced. */
 .row__lock {

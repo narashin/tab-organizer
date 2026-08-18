@@ -137,7 +137,6 @@ test('loads the extension and completes localized BYOK onboarding', async () => 
     });
     expect(otherWindow.windowId).not.toBeNull();
     await page.bringToFront();
-
     const scopedReview = await page.evaluate(async () => {
       const review = await chrome.runtime.sendMessage({ type: 'sync/review', scope: 'current' }) as {
         proposal?: { changes: Array<{ tabId: number; windowId: number }> };
@@ -173,24 +172,15 @@ test('loads the extension and completes localized BYOK onboarding', async () => 
     const groupsAfterApply = await serviceWorker.evaluate(async () => chrome.tabGroups.query({}));
     expect(groupsAfterApply.some((group) => group.title === 'E2E Work')).toBe(true);
 
+    // The tab stays in the group it was moved into: an apply is final now, and the navigation
+    // no longer offers a History section at all.
     await page.reload();
-    await page.getByRole('button', { name: 'History' }).click();
-    await expect(page.getByRole('button', { name: 'Undo' })).toBeVisible();
-    const undoResponse = await page.evaluate(async () => {
-      const stateResponse = await chrome.runtime.sendMessage({ type: 'organization/get' }) as {
-        state?: { history: Array<{ id: string; undoneAt: number | null }> };
-      };
-      const operation = stateResponse.state?.history.find((item) => item.undoneAt === null);
-      return operation === undefined
-        ? null
-        : chrome.runtime.sendMessage({ type: 'history/undo', operationId: operation.id });
-    });
-    expect(undoResponse).toMatchObject({ ok: true });
+    expect(await page.getByRole('button', { name: 'History' }).count()).toBe(0);
     const workTabGroupId = await serviceWorker.evaluate(async (url) => {
       const tab = (await chrome.tabs.query({ url }))[0];
       return tab?.groupId ?? null;
     }, 'https://work.example.test/*');
-    expect(workTabGroupId).toBe(-1);
+    expect(workTabGroupId).not.toBe(-1);
 
     await page.evaluate(async () => {
       await chrome.runtime.sendMessage({
@@ -237,7 +227,6 @@ test('loads the extension and completes localized BYOK onboarding', async () => 
       const bulkTabs = await chrome.tabs.query({ url: 'https://bulk.example.test/*' });
       return bulkTabs.filter((tab) => tab.status === 'complete').length;
     }), { timeout: 40_000 }).toBe(101);
-
     const bulkRequestStart = classificationInputs.length;
     const bulkResult = await page.evaluate(async () => {
       const review = await chrome.runtime.sendMessage({ type: 'sync/review', scope: 'all' }) as {
@@ -250,11 +239,14 @@ test('loads the extension and completes localized BYOK onboarding', async () => 
       const apply = await chrome.runtime.sendMessage({
         type: 'sync/apply', proposalId: review.proposal.id, selectedTabIds,
       });
-      return { reviewed: review.proposal.changes.length, apply };
+      return { reviewed: review.proposal.changes.length, selected: selectedTabIds.length, apply };
     });
-    expect(bulkResult).toMatchObject({
-      reviewed: 102,
-      apply: { ok: true, applyResult: { applied: 102, skipped: 0 } },
+    // One change per bulk tab. The work tab from earlier is not among them: it already sits in the
+    // group this run would propose for it, and an apply is final now, so nothing pulled it back out.
+    expect(bulkResult?.reviewed).toBe(bulkTabIds.length);
+    expect(bulkResult?.apply).toMatchObject({
+      ok: true,
+      applyResult: { applied: bulkResult?.selected, skipped: 0 },
     });
     const bulkRequests = classificationInputs.slice(bulkRequestStart)
       .filter((input) => input.mode === 'synchronization');

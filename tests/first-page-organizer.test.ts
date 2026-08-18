@@ -19,7 +19,6 @@ import {
   ChromeFirstPagePlatform,
   registerTabLifecycle,
 } from '../src/background/chrome-platform';
-import { HistoryStore } from '../src/background/history-store';
 
 class MemoryStorage implements LocalStorageArea {
   readonly values: StoredValues = {};
@@ -722,80 +721,6 @@ describe('FirstPageOrganizer', () => {
     await Promise.resolve();
 
     expect(organizer.registerCreated).not.toHaveBeenCalled();
-  });
-
-  it('records automatic history before the Chrome group mutation', async () => {
-    const actions: string[] = [];
-    const local = new MemoryStorage();
-    const set = local.set.bind(local);
-    local.set = async (items) => {
-      if ('organizationHistory' in items) actions.push('history');
-      await set(items);
-    };
-    const history = new HistoryStore(local, () => 'automatic-1', () => 100);
-    const tabs = {
-      getTab: async () => ({
-        tabId: 42,
-        windowId: 3,
-        title: eligibleTab.title,
-        url: eligibleTab.url,
-        groupId: -1,
-        incognito: false,
-      }),
-      listGroups: async () => [{
-        ref: 'group-7', groupId: 7, windowId: 3, title: 'Work', color: 'blue' as const,
-      }],
-      moveToExistingGroup: async (tabIds: number[], groupId: number) => {
-        actions.push(`existing:${tabIds.join(',')}:${groupId}`);
-      },
-      moveToNewGroup: async () => 1,
-    } as unknown as ChromeSynchronizationPlatform;
-    const platform = new ChromeFirstPagePlatform(
-      tabs,
-      new PresetStore(local, () => 'preset-1'),
-      history,
-    );
-
-    await platform.moveToExistingGroup(42, 7);
-
-    expect(actions).toEqual(['history', 'existing:42:7', 'history']);
-    await expect(history.list()).resolves.toMatchObject([
-      {
-        id: 'automatic-1',
-        kind: 'automatic',
-        status: 'completed',
-        tabs: [{
-          tabId: 42,
-          windowId: 3,
-          group: null,
-          expectedGroup: { groupId: 7, title: 'Work', color: 'blue' },
-        }],
-      },
-    ]);
-  });
-
-  it('records the actual new group ID for automatic preset moves', async () => {
-    const local = new MemoryStorage();
-    const history = new HistoryStore(local, () => 'automatic-1', () => 100);
-    const presets = new PresetStore(local, () => 'preset-1');
-    await presets.create({ name: 'Work', description: 'Work tabs', cues: [], color: 'blue' });
-    const tabs = {
-      getTab: async () => ({
-        tabId: 42, windowId: 3, title: eligibleTab.title, url: eligibleTab.url,
-        groupId: -1, incognito: false,
-      }),
-      listGroups: async () => [],
-      moveToExistingGroup: async () => undefined,
-      moveToNewGroup: async () => 55,
-    } as unknown as ChromeSynchronizationPlatform;
-    const platform = new ChromeFirstPagePlatform(tabs, presets, history);
-
-    await platform.moveToPreset(42, 3, 'preset-1');
-
-    expect(await history.list()).toMatchObject([{
-      status: 'completed',
-      tabs: [{ expectedGroup: { groupId: 55, title: 'Work', color: 'blue' } }],
-    }]);
   });
 
   it('rolls back Chrome group membership when new-group metadata update fails', async () => {

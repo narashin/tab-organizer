@@ -7,19 +7,14 @@ function tab(partial: Partial<OrderedTab> & { tabId: number; index: number }): O
 }
 
 /** Replays a plan against a list of tab ids, so assertions read as the strip the user would see. */
-function apply(tabs: OrderedTab[], groups: OrderedGroup[]): string[] {
+function apply(tabs: OrderedTab[], groups: OrderedGroup[], presetNames: string[] = []): string[] {
   const strip = [...tabs].sort((left, right) => left.index - right.index);
-  for (const step of planTabOrder(tabs, groups)) {
-    if (step.kind === 'group') {
-      const members = strip.filter((item) => item.groupId === step.groupId);
-      for (const member of members) strip.splice(strip.indexOf(member), 1);
-      strip.splice(step.index < 0 ? strip.length : step.index, 0, ...members);
-      continue;
-    }
-    const moved = strip.find((item) => item.tabId === step.tabId);
-    if (moved === undefined) continue;
-    strip.splice(strip.indexOf(moved), 1);
-    strip.splice(step.index < 0 ? strip.length : step.index, 0, moved);
+  for (const step of planTabOrder(tabs, groups, presetNames)) {
+    const moved = step.kind === 'group'
+      ? strip.filter((item) => item.groupId === step.groupId)
+      : step.tabIds.flatMap((tabId) => strip.filter((item) => item.tabId === tabId));
+    for (const item of moved) strip.splice(strip.indexOf(item), 1);
+    strip.splice(step.index < 0 ? strip.length : step.index, 0, ...moved);
   }
   return strip.map((item) => item.title);
 }
@@ -44,6 +39,36 @@ describe('planTabOrder', () => {
     ]);
   });
 
+  it('places groups a preset named in preset order, ahead of the alphabetical rest', () => {
+    const tabs = [
+      tab({ tabId: 1, index: 0, groupId: 1, title: 'A note' }),
+      tab({ tabId: 2, index: 1, groupId: 2, title: 'B note' }),
+      tab({ tabId: 3, index: 2, groupId: 3, title: 'C note' }),
+    ];
+    const groups: OrderedGroup[] = [
+      { groupId: 1, title: 'Alfa' },
+      { groupId: 2, title: 'Zulu' },
+      { groupId: 3, title: 'Mike' },
+    ];
+
+    // Zulu comes first because the user put that preset first; Alfa is not a preset, so it falls
+    // behind every preset group and sorts by title with the others.
+    expect(apply(tabs, groups, ['Zulu', 'Mike'])).toEqual(['B note', 'C note', 'A note']);
+  });
+
+  it('matches a preset to a group by name alone, ignoring case and spacing', () => {
+    const tabs = [
+      tab({ tabId: 1, index: 0, groupId: 1, title: 'first' }),
+      tab({ tabId: 2, index: 1, groupId: 2, title: 'second' }),
+    ];
+    const groups: OrderedGroup[] = [
+      { groupId: 1, title: 'Alfa' },
+      { groupId: 2, title: 'zulu' },
+    ];
+
+    expect(apply(tabs, groups, ['  ZULU  '])).toEqual(['second', 'first']);
+  });
+
   it('leaves pinned tabs where Chrome keeps them, at the front', () => {
     const tabs = [
       tab({ tabId: 1, index: 0, pinned: true, title: 'zzz pinned' }),
@@ -54,14 +79,25 @@ describe('planTabOrder', () => {
     expect(apply(tabs, [{ groupId: 4, title: 'Work' }])).toEqual(['zzz pinned', 'Alpha', 'Beta']);
   });
 
-  it('refuses to reorder a window holding Split View tabs', () => {
+  it('keeps a Split View pair together and puts it at the head of its section', () => {
     const tabs = [
-      tab({ tabId: 1, index: 0, title: 'zebra' }),
-      tab({ tabId: 2, index: 1, title: 'apple', splitViewId: 3 }),
+      tab({ tabId: 1, index: 0, title: 'apple' }),
+      tab({ tabId: 2, index: 1, title: 'zebra left', splitViewId: 3 }),
+      tab({ tabId: 3, index: 2, title: 'melon' }),
+      tab({ tabId: 4, index: 3, title: 'zebra right', splitViewId: 3 }),
     ];
 
-    // Sorting moves everything around the pair, which is still a move.
-    expect(planTabOrder(tabs, [])).toEqual([]);
+    // The pair keeps a fixed place instead of being buried wherever its titles happen to sort.
+    expect(apply(tabs, [])).toEqual(['zebra left', 'zebra right', 'apple', 'melon']);
+  });
+
+  it('moves the two halves of a pair in one step, so nothing can land between them', () => {
+    const tabs = [
+      tab({ tabId: 1, index: 0, title: 'left', splitViewId: 5 }),
+      tab({ tabId: 2, index: 1, title: 'right', splitViewId: 5 }),
+    ];
+
+    expect(planTabOrder(tabs, [])).toEqual([{ kind: 'tabs', tabIds: [1, 2], index: -1 }]);
   });
 
   it('sorts case and digits the way a reader expects', () => {
@@ -82,6 +118,6 @@ describe('planTabOrder', () => {
     const tabs = [tab({ tabId: 1, index: 0, title: 'only' })];
 
     expect(planTabOrder(tabs, [{ groupId: 5, title: 'Empty' }]))
-      .toEqual([{ kind: 'tab', tabId: 1, index: -1 }]);
+      .toEqual([{ kind: 'tabs', tabIds: [1], index: -1 }]);
   });
 });

@@ -2,8 +2,9 @@
  * Alphabetical ordering of a window's tab strip.
  *
  * Kept apart from grouping on purpose: this decides where tabs sit, never which group they belong
- * to. The layout it produces is [pinned] [groups by title] [ungrouped by title], and the order it
- * replaces is not recorded anywhere, so a sort cannot be undone.
+ * to. The layout it produces is [pinned] [groups named by a preset, in preset order] [remaining
+ * groups by title] [ungrouped by title]. The order it replaces is not recorded anywhere, so nothing
+ * can put it back.
  */
 
 export interface OrderedTab {
@@ -23,13 +24,14 @@ export interface OrderedGroup {
 
 export interface TabOrderPlatform {
   listWindowTabs(windowId: number): Promise<OrderedTab[]>;
-  moveTab(tabId: number, index: number): Promise<void>;
+  /** Moves tabs as one block, which is what keeps a Split View pair together. */
+  moveTabs(tabIds: number[], index: number): Promise<void>;
   moveGroup(groupId: number, index: number): Promise<void>;
 }
 
 export type TabOrderStep =
   | { kind: 'group'; groupId: number; index: number }
-  | { kind: 'tab'; tabId: number; index: number };
+  | { kind: 'tabs'; tabIds: number[]; index: number };
 
 /** Where Chrome puts something moved with no position in mind. */
 const END_OF_WINDOW = -1;
@@ -40,15 +42,76 @@ function byTitle(left: { title: string }, right: { title: string }): number {
 }
 
 /**
- * Plans the moves that put one window in alphabetical order.
+ * Ranks the groups a preset named, in the order the presets are stored.
  *
- * Returns an empty plan for a window holding Split View tabs. Sorting moves everything around them,
- * which is still a move, and this extension does not move a tab in Split View.
+ * A preset is a name the user chose deliberately, so its position is a decision rather than an
+ * accident of the alphabet. Groups no preset covers keep alphabetical order behind them.
  */
-export function planTabOrder(tabs: OrderedTab[], groups: OrderedGroup[]): TabOrderStep[] {
-  if (tabs.some((tab) => tab.splitViewId !== undefined && tab.splitViewId >= 0)) return [];
+function toPresetRanks(presetNames: readonly string[]): Map<string, number> {
+  const ranks = new Map<string, number>();
+  presetNames.forEach((name, index) => {
+    const key = name.trim().toLowerCase();
+    if (key.length > 0 && !ranks.has(key)) ranks.set(key, index);
+  });
+  return ranks;
+}
 
-  const movable = [...tabs].filter((tab) => !tab.pinned).sort((left, right) => left.index - right.index);
+function splitIdOf(tab: OrderedTab): number | null {
+  return tab.splitViewId === undefined || tab.splitViewId < 0 ? null : tab.splitViewId;
+}
+
+/**
+ * Collects tabs into the blocks that have to move together.
+ *
+ * A Split View pair is two tabs Chrome draws side by side. Putting anything between them, or moving
+ * one without the other, is what would break the split, so the pair travels as a single block.
+ * Skipping such a window entirely was the earlier answer, and it meant one split pair left a
+ * hundred tabs unsorted.
+ */
+function toBlocks(tabs: OrderedTab[]): { tabIds: number[]; title: string }[] {
+  const blocks: { tabIds: number[]; title: string }[] = [];
+  const splits = new Map<number, { tabIds: number[]; title: string }>();
+  for (const tab of tabs) {
+    const splitId = splitIdOf(tab);
+    if (splitId === null) {
+      blocks.push({ tabIds: [tab.tabId], title: tab.title });
+      continue;
+    }
+    const existing = splits.get(splitId);
+    if (existing === undefined) {
+      const block = { tabIds: [tab.tabId], title: tab.title };
+      splits.set(splitId, block);
+      blocks.push(block);
+      continue;
+    }
+    existing.tabIds.push(tab.tabId);
+    if (byTitle(tab, existing) < 0) existing.title = tab.title;
+  }
+  return blocks;
+}
+
+/**
+ * Orders the blocks of a section: Split View pairs first, then everything else by title.
+ *
+ * A pair is a layout the user built by hand, so it gets a fixed place at the head of its section
+ * rather than a position that moves whenever one of its titles changes.
+ */
+function sortBlocks(blocks: { tabIds: number[]; title: string }[]): { tabIds: number[]; title: string }[] {
+  return [...blocks].sort((left, right) => {
+    const difference = Number(right.tabIds.length > 1) - Number(left.tabIds.length > 1);
+    return difference === 0 ? byTitle(left, right) : difference;
+  });
+}
+
+/** Plans the moves that put one window in alphabetical order. */
+export function planTabOrder(
+  tabs: OrderedTab[],
+  groups: OrderedGroup[],
+  presetNames: readonly string[] = [],
+): TabOrderStep[] {
+  const movable = [...tabs]
+    .filter((tab) => !tab.pinned)
+    .sort((left, right) => left.index - right.index);
   const grouped = new Map<number, OrderedTab[]>();
   for (const tab of movable) {
     if (tab.groupId < 0) continue;
@@ -60,23 +123,31 @@ export function planTabOrder(tabs: OrderedTab[], groups: OrderedGroup[]): TabOrd
 
   const steps: TabOrderStep[] = [];
   // Groups first, each sent to the end in turn, which leaves them in order at the end.
-  const sortedGroups = [...presentGroups].sort(byTitle);
+  const ranks = toPresetRanks(presetNames);
+  const rankOf = (group: OrderedGroup): number =>
+    ranks.get(group.title.trim().toLowerCase()) ?? Number.MAX_SAFE_INTEGER;
+  const sortedGroups = [...presentGroups].sort((left, right) => {
+    const difference = rankOf(left) - rankOf(right);
+    return difference === 0 ? byTitle(left, right) : difference;
+  });
   for (const group of sortedGroups) {
     steps.push({ kind: 'group', groupId: group.groupId, index: END_OF_WINDOW });
   }
   // Then the loose tabs, which lands them after every group.
-  for (const tab of [...ungrouped].sort(byTitle)) {
-    steps.push({ kind: 'tab', tabId: tab.tabId, index: END_OF_WINDOW });
+  for (const block of sortBlocks(toBlocks(ungrouped))) {
+    steps.push({ kind: 'tabs', tabIds: block.tabIds, index: END_OF_WINDOW });
   }
 
   // With the blocks placed, every group's range is known, so its members move to absolute indices.
   // A tab moved inside its own group's range keeps its membership; one moved past it would not.
   let start = tabs.filter((tab) => tab.pinned).length;
   for (const group of sortedGroups) {
-    const members = [...(grouped.get(group.groupId) ?? [])].sort(byTitle);
-    members.forEach((tab, offset) => {
-      steps.push({ kind: 'tab', tabId: tab.tabId, index: start + offset });
-    });
+    const members = grouped.get(group.groupId) ?? [];
+    let offset = 0;
+    for (const block of sortBlocks(toBlocks(members))) {
+      steps.push({ kind: 'tabs', tabIds: block.tabIds, index: start + offset });
+      offset += block.tabIds.length;
+    }
     start += members.length;
   }
   return steps;

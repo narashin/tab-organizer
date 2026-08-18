@@ -331,7 +331,7 @@ describe('App', () => {
     });
     expect(checkbox).not.toBeChecked();
     // The order it replaces is gone for good, so the interface has to say so before it is on.
-    expect(screen.getByText(/undo cannot bring it back/)).toBeVisible();
+    expect(screen.getByText(/cannot be restored/)).toBeVisible();
 
     await user.click(checkbox);
 

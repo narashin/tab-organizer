@@ -4,7 +4,11 @@ import type {
   Classifier,
   TaxonomyPlanner,
 } from './classifier';
-import type { GroupDescriptor, HistoryStore, PriorTabState } from './history-store';
+/** A group as the interface needs to name it: the title and the color, nothing else. */
+export interface GroupDescriptor {
+  title: string;
+  color: GroupColor;
+}
 import type { GroupColor, PresetStore } from './preset-store';
 import { translations, type SupportedLocale } from '../shared/localization';
 import { toClassificationHostname } from '../shared/tab-context';
@@ -14,7 +18,7 @@ import {
   maxGroupCount,
   type GroupingGranularity,
 } from '../shared/grouping';
-import { planTabOrder, type TabOrderPlatform } from './tab-order';
+import { planTabOrder, type TabOrderPlatform, type TabOrderStep } from './tab-order';
 import type { TabLockStore } from './tab-lock-store';
 import type { LocalStorageArea } from './settings-service';
 
@@ -114,6 +118,20 @@ export interface SynchronizationProposal {
 
 const PLAN_FAILURE_REASON_MAX_LENGTH = 120;
 
+/**
+ * Why a requested sort did not put a window in order.
+ *
+ * A sort that quietly does nothing is indistinguishable from a setting that never took effect,
+ * which is exactly how it was reported.
+ */
+export type SortOutcome = 'move_refused' | 'unavailable';
+
+export interface ApplyResult {
+  applied: number;
+  skipped: number;
+  sortOutcome: SortOutcome | null;
+}
+
 interface StoredSynchronizationProposal {
   proposal: SynchronizationProposal;
   reviewedUrls: Record<string, string>;
@@ -134,7 +152,7 @@ export class SynchronizationService {
     proposal: SynchronizationProposal;
     reviewedUrls: Map<number, string>;
   }>();
-  private readonly applyTasks = new Map<string, Promise<{ applied: number; skipped: number }>>();
+  private readonly applyTasks = new Map<string, Promise<ApplyResult>>();
   private proposalStorageMutation: Promise<void> = Promise.resolve();
   private operationMutation: Promise<void> = Promise.resolve();
   private reviewsInFlight = 0;
@@ -143,7 +161,6 @@ export class SynchronizationService {
     private readonly classifier: Classifier,
     private readonly presets: PresetStore,
     private readonly locks: TabLockStore,
-    private readonly history: HistoryStore,
     private readonly platform: SynchronizationPlatform,
     private readonly getLocale: () => SupportedLocale,
     private readonly createProposalId: () => string,
@@ -151,7 +168,9 @@ export class SynchronizationService {
     private readonly taxonomyPlanner?: TaxonomyPlanner,
     private readonly getGranularity: () => GroupingGranularity = () => DEFAULT_GROUPING_GRANULARITY,
     private readonly getSendPathEnabled: () => boolean = () => false,
-    private readonly getSortTabsEnabled: () => boolean = () => false,
+    // Read at apply time, not cached from the classification pass: a setting turned on while a
+    // review sat waiting was still off by the time the tabs moved.
+    private readonly getSortTabsEnabled: () => boolean | Promise<boolean> = () => false,
     private readonly tabOrder?: TabOrderPlatform,
   ) {}
 
@@ -160,26 +179,37 @@ export class SynchronizationService {
    *
    * Runs after the moves rather than instead of them, and never fails the apply: the tabs are
    * already where they belong, and a strip in the original order is a cosmetic loss. The previous
-   * order is not recorded, so undo restores groups and leaves the order alone.
+   * previous order is not recorded anywhere, so a sort cannot be reversed.
    */
-  private async sortWindows(windowIds: number[]): Promise<void> {
+  private async sortWindows(windowIds: number[]): Promise<SortOutcome | null> {
     const platform = this.tabOrder;
-    if (platform === undefined || !this.getSortTabsEnabled()) return;
+    if (platform === undefined || !(await this.getSortTabsEnabled())) return null;
+    let outcome: SortOutcome | null = null;
     for (const windowId of windowIds) {
+      let steps: TabOrderStep[] = [];
       try {
         const groups = await this.platform.listGroups(windowId);
-        const steps = planTabOrder(await platform.listWindowTabs(windowId), groups);
-        for (const step of steps) {
+        const presetNames = (await this.presets.list()).map((preset) => preset.name);
+        steps = planTabOrder(await platform.listWindowTabs(windowId), groups, presetNames);
+      } catch {
+        outcome ??= 'unavailable';
+        continue;
+      }
+      // One refused move must not abandon the rest of the strip: a half-sorted window reads as the
+      // feature being broken, and the reason is worth reporting rather than swallowing.
+      for (const step of steps) {
+        try {
           if (step.kind === 'group') {
             await platform.moveGroup(step.groupId, step.index);
           } else {
-            await platform.moveTab(step.tabId, step.index);
+            await platform.moveTabs(step.tabIds, step.index);
           }
+        } catch {
+          outcome ??= 'move_refused';
         }
-      } catch {
-        // A window that refuses to be reordered keeps the order it had.
       }
     }
+    return outcome;
   }
 
   // One bad chunk must not discard the rest of the window, so failures stay local and retry once.
@@ -462,7 +492,7 @@ export class SynchronizationService {
     return stored.proposal;
   }
 
-  async apply(proposalId: string, selectedTabIds: number[]): Promise<{ applied: number; skipped: number }> {
+  async apply(proposalId: string, selectedTabIds: number[]): Promise<ApplyResult> {
     const active = this.applyTasks.get(proposalId);
     if (active !== undefined) return active;
     const task = this.enqueueOperation(() => this.applyOnce(proposalId, selectedTabIds));
@@ -474,10 +504,7 @@ export class SynchronizationService {
     }
   }
 
-  private async applyOnce(
-    proposalId: string,
-    selectedTabIds: number[],
-  ): Promise<{ applied: number; skipped: number }> {
+  private async applyOnce(proposalId: string, selectedTabIds: number[]): Promise<ApplyResult> {
     const storedProposal = await this.loadProposal(proposalId);
     if (storedProposal === undefined) throw new Error('proposal_not_found');
     const proposal = storedProposal.proposal;
@@ -539,24 +566,16 @@ export class SynchronizationService {
       valid.push(change);
     }
 
+    // The windows the user asked to act on, whether or not a move survived the recheck. Sorting is
+    // gated on the setting alone: a window that was already grouped correctly still gets the order
+    // the setting asks for, which is what pressing Apply with the box ticked has to mean.
+    const selectedWindowIds = [...new Set(
+      proposal.changes.filter((change) => selected.has(change.tabId)).map((change) => change.windowId),
+    )];
     if (valid.length === 0) {
       await this.removeProposal(proposalId);
-      return { applied: 0, skipped };
+      return { applied: 0, skipped, sortOutcome: await this.sortWindows(selectedWindowIds) };
     }
-    const prior: PriorTabState[] = valid.map((change) => ({
-      tabId: change.tabId,
-      windowId: change.windowId,
-      group: change.currentGroup === null ? null : {
-        ...change.currentGroup,
-        ...(change.currentGroupId < 0 ? {} : { groupId: change.currentGroupId }),
-      },
-      expectedGroup: {
-        ...(change.target.groupId === null ? {} : { groupId: change.target.groupId }),
-        title: change.target.title,
-        color: change.target.color,
-      },
-    }));
-    const operation = await this.history.record('sync', prior);
 
     const grouped = new Map<string, SynchronizationChange[]>();
     for (const change of valid) {
@@ -595,7 +614,6 @@ export class SynchronizationService {
       });
       skipped += bucket.length - currentBucket.length;
       if (currentBucket.length === 0) continue;
-      let newGroupId: number | null = null;
       try {
         if (first.target.groupId !== null) {
           await this.platform.moveToExistingGroup(
@@ -603,7 +621,7 @@ export class SynchronizationService {
             first.target.groupId,
           );
         } else {
-          newGroupId = await this.platform.moveToNewGroup(
+          await this.platform.moveToNewGroup(
             currentBucket.map((change) => change.tabId),
             first.windowId,
             first.target.title,
@@ -615,31 +633,11 @@ export class SynchronizationService {
         skipped += currentBucket.length;
         continue;
       }
-      if (newGroupId !== null) {
-        await this.setExpectedGroupIdBestEffort(
-          operation.id,
-          currentBucket.map((change) => change.tabId),
-          newGroupId,
-        );
-      }
     }
-    await this.history.markStatus(operation.id, applied === valid.length ? 'completed' : 'partial');
     await this.removeProposal(proposalId);
-    if (applied > 0) await this.sortWindows([...new Set(valid.map((change) => change.windowId))]);
-    return { applied, skipped };
+    return { applied, skipped, sortOutcome: await this.sortWindows(selectedWindowIds) };
   }
 
-  private async setExpectedGroupIdBestEffort(
-    operationId: string,
-    tabIds: number[],
-    groupId: number,
-  ): Promise<void> {
-    try {
-      await this.history.setExpectedGroupId(operationId, tabIds, groupId);
-    } catch {
-      // The stored group descriptor remains available for undo fallback.
-    }
-  }
 
   private async persistProposal(stored: StoredSynchronizationProposal): Promise<void> {
     if (this.proposalStorage === undefined) return;

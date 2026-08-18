@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { OrganizationState } from '../src/background/organization-service';
 import type { PresetDraft } from '../src/background/preset-store';
 import type { SettingsState } from '../src/background/settings-service';
-import type { SynchronizationProposal } from '../src/background/synchronization-service';
+import type { ApplyResult, SynchronizationProposal } from '../src/background/synchronization-service';
 import {
   translations,
   withProviderName,
@@ -44,10 +44,9 @@ class ReadySettingsClient implements SettingsClient {
 }
 
 class MemoryOrganizationClient implements OrganizationClient {
-  state: OrganizationState = { presets: [], locks: [], history: [], failedTabIds: [], tabSummaries: [] };
+  state: OrganizationState = { presets: [], locks: [], failedTabIds: [], tabSummaries: [] };
   applied: number[] = [];
-  applyResult = { applied: 0, skipped: 0 };
-  undoneIds: string[] = [];
+  applyResult = { applied: 0, skipped: 0, sortOutcome: null as null | 'move_refused' | 'unavailable' };
   lockedIds: number[] = [];
   retriedIds: number[] = [];
   applyCalls = 0;
@@ -67,6 +66,16 @@ class MemoryOrganizationClient implements OrganizationClient {
   }
   async deletePreset(id: string) {
     this.state = { ...this.state, presets: this.state.presets.filter((preset) => preset.id !== id) };
+    return this.state;
+  }
+  async reorderPresets(orderedIds: readonly string[]) {
+    const ordered = orderedIds
+      .map((id) => this.state.presets.find((preset) => preset.id === id))
+      .filter((preset): preset is OrganizationState['presets'][number] => preset !== undefined);
+    this.state = {
+      ...this.state,
+      presets: [...ordered, ...this.state.presets.filter((preset) => !orderedIds.includes(preset.id))],
+    };
     return this.state;
   }
   async lockActiveTab() { return this.state; }
@@ -103,19 +112,8 @@ class MemoryOrganizationClient implements OrganizationClient {
     this.applyCalls += 1;
     this.applied = selectedTabIds;
     return this.applyResult.applied === 0 && this.applyResult.skipped === 0
-      ? { applied: selectedTabIds.length, skipped: 0 }
+      ? { applied: selectedTabIds.length, skipped: 0, sortOutcome: this.applyResult.sortOutcome }
       : this.applyResult;
-  }
-  undoOutcome = { restored: 1, skipped: 0 };
-  async undo(operationId: string) {
-    this.undoneIds.push(operationId);
-    this.state = {
-      ...this.state,
-      history: this.state.history.map((operation) => operation.id === operationId
-        ? { ...operation, undoneAt: 200 }
-        : operation),
-    };
-    return { state: this.state, ...this.undoOutcome };
   }
 }
 
@@ -180,9 +178,8 @@ describe('App organization flows', () => {
       await user.click(screen.getByRole('button', { name: text.navPresets }));
       expect(await screen.findByRole('heading', { name: text.presetsTitle })).toBeVisible();
       await user.click(screen.getByRole('button', { name: text.navLocked }));
-      expect(await screen.findByRole('heading', { name: text.lockedTitle })).toBeVisible();
-      await user.click(screen.getByRole('button', { name: text.navHistory }));
-      expect(await screen.findByRole('heading', { name: text.historyTitle })).toBeVisible();
+      // No heading there: the navigation already names the section, so the region carries the label.
+      expect(await screen.findByRole('region', { name: text.lockedTitle })).toBeVisible();
       await user.click(screen.getByRole('button', { name: text.navSettings }));
       expect(await screen.findByRole('heading', {
         // The heading names the provider whose key it asks for.
@@ -277,6 +274,48 @@ describe('App organization flows', () => {
       }],
     });
     expect(await screen.findByText('Apollo')).toBeVisible();
+  });
+
+  it('reorders presets from the keyboard, because a drop target cannot be reached without a mouse', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    organization.state = {
+      ...organization.state,
+      presets: [
+        { id: 'first', name: 'Alfa', description: 'A', cues: [], color: 'blue' },
+        { id: 'second', name: 'Zulu', description: 'Z', cues: [], color: 'green' },
+      ],
+    };
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Presets' }));
+
+    const grip = screen.getByRole('button', { name: 'Reorder Zulu' });
+    grip.focus();
+    await user.keyboard('{ArrowUp}');
+
+    expect(organization.state.presets.map((preset) => preset.name)).toEqual(['Zulu', 'Alfa']);
+
+    // The order is what places groups when tabs are sorted, so the list says so.
+    expect(screen.getByText(/Groups named by a preset are placed in this order/)).toBeVisible();
+  });
+
+  it('refuses to move the first preset above itself', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    organization.state = {
+      ...organization.state,
+      presets: [{ id: 'only', name: 'Alfa', description: 'A', cues: [], color: 'blue' }],
+    };
+    let reorders = 0;
+    const reorder = organization.reorderPresets.bind(organization);
+    organization.reorderPresets = async (ids) => { reorders += 1; return reorder(ids); };
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Presets' }));
+
+    screen.getByRole('button', { name: 'Reorder Alfa' }).focus();
+    await user.keyboard('{ArrowUp}{ArrowDown}');
+
+    expect(reorders).toBe(0);
   });
 
   it('updates and deletes a preset from the Presets section', async () => {
@@ -377,7 +416,7 @@ describe('App organization flows', () => {
   it('reports applied and skipped counts after synchronization', async () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
-    organization.applyResult = { applied: 2, skipped: 1 };
+    organization.applyResult = { applied: 2, skipped: 1, sortOutcome: null };
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
     await user.click(screen.getByRole('button', { name: 'Sync current window' }));
@@ -515,32 +554,6 @@ describe('App organization flows', () => {
     expect(screen.getByText('Quarterly report')).toBeVisible();
     expect(screen.getByText('reports.test')).toBeVisible();
     expect(screen.getByText('Release checklist')).toBeVisible();
-  });
-
-  it('reports what an undo put back, and explains what it left alone', async () => {
-    const user = userEvent.setup();
-    const organization = new MemoryOrganizationClient();
-    organization.state = {
-      ...organization.state,
-      history: [{
-        id: 'history-1', kind: 'sync', createdAt: 100,
-        tabs: [{ tabId: 1, windowId: 3, group: null }], undoneAt: null,
-      }],
-    };
-    // An undo that puts back almost nothing used to look exactly like one that put back everything.
-    organization.undoOutcome = { restored: 1, skipped: 4 };
-    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'History' }));
-
-    await user.click(screen.getByRole('button', { name: 'Undo' }));
-
-    // The operation notice is also a status region, so this picks the one that reports counts.
-    const outcome = (await screen.findAllByRole('status'))
-      .find((element) => element.textContent?.includes('Restored'));
-    if (outcome === undefined) throw new Error('the undo outcome was never reported');
-    expect(outcome).toHaveTextContent('Restored: 1 · Skipped: 4');
-    // The reasons live in tab state the user cannot see from the history list.
-    expect(within(outcome).getByRole('note')).toHaveAccessibleName(/moved to another window/);
   });
 
   it('says when the run had no grouping plan, since that is why the groups came out small', async () => {
@@ -716,7 +729,7 @@ describe('App organization flows', () => {
   it('prevents duplicate apply requests while one is pending', async () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
-    let resolveApply: ((value: { applied: number; skipped: number }) => void) | undefined;
+    let resolveApply: ((value: ApplyResult) => void) | undefined;
     organization.apply = async () => {
       organization.applyCalls += 1;
       return new Promise((resolve) => { resolveApply = resolve; });
@@ -730,14 +743,14 @@ describe('App organization flows', () => {
     expect(apply).toBeDisabled();
     await user.click(apply);
     expect(organization.applyCalls).toBe(1);
-    resolveApply?.({ applied: 1, skipped: 0 });
+    resolveApply?.({ applied: 1, skipped: 0, sortOutcome: null });
     expect(await screen.findByText('Applied changes: 1 · Skipped changes: 0')).toBeVisible();
   });
 
   it('prevents review and proposal edits while apply is pending', async () => {
     const user = userEvent.setup();
     const organization = new MemoryOrganizationClient();
-    let resolveApply: ((value: { applied: number; skipped: number }) => void) | undefined;
+    let resolveApply: ((value: ApplyResult) => void) | undefined;
     organization.apply = async () => new Promise((resolve) => { resolveApply = resolve; });
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Review' }));
@@ -750,7 +763,7 @@ describe('App organization flows', () => {
     expect(screen.getByRole('button', { name: 'Sync current window' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Deselect all in Work' })).toBeDisabled();
     expect(screen.getByRole('checkbox', { name: /Normal/ })).toBeDisabled();
-    resolveApply?.({ applied: 1, skipped: 0 });
+    resolveApply?.({ applied: 1, skipped: 0, sortOutcome: null });
     expect(await screen.findByText('Applied changes: 1 · Skipped changes: 0')).toBeVisible();
   });
 
@@ -803,7 +816,35 @@ describe('App organization flows', () => {
     render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
     await user.click(await screen.findByRole('button', { name: 'Locked' }));
 
-    await user.click(screen.getByRole('button', { name: 'Unlock' }));
+    await user.click(screen.getByRole('checkbox'));
+    await user.click(screen.getByRole('button', { name: 'Unlock (1)' }));
+
+    expect(await screen.findByText('No locked tabs.')).toBeVisible();
+  });
+
+  it('unlocks every selected tab in one action', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    organization.state = {
+      ...organization.state,
+      locks: [
+        { tabId: 1, lockedAt: 100, changed: false },
+        { tabId: 2, lockedAt: 100, changed: true },
+        { tabId: 3, lockedAt: 100, changed: false },
+      ],
+      tabSummaries: [
+        { tabId: 1, title: 'First locked', hostname: 'one.test' },
+        { tabId: 2, title: 'Second locked', hostname: 'two.test' },
+        { tabId: 3, title: 'Third locked', hostname: 'three.test' },
+      ],
+    };
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+    await user.click(await screen.findByRole('button', { name: 'Locked' }));
+
+    // Clearing a long list one row at a time is what this replaces.
+    await user.click(screen.getByRole('button', { name: 'Select all' }));
+    expect(screen.getByText('Selected changes: 3')).toBeVisible();
+    await user.click(screen.getByRole('button', { name: 'Unlock (3)' }));
 
     expect(await screen.findByText('No locked tabs.')).toBeVisible();
   });
@@ -826,87 +867,6 @@ describe('App organization flows', () => {
 
     expect(await screen.findByText('No presets yet.')).toBeVisible();
     expect(attempts).toBe(2);
-  });
-
-  it('runs undo from the History button with the selected operation ID', async () => {
-    const user = userEvent.setup();
-    const organization = new MemoryOrganizationClient();
-    organization.state = {
-      ...organization.state,
-      history: [{
-        id: 'history-1',
-        kind: 'sync',
-        createdAt: 100,
-        tabs: [{ tabId: 1, windowId: 3, group: null }],
-        undoneAt: null,
-      }],
-    };
-    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'History' }));
-
-    await user.click(screen.getByRole('button', { name: 'Undo' }));
-
-    expect(organization.undoneIds).toEqual(['history-1']);
-    expect(await screen.findByRole('button', { name: 'Undone' })).toBeDisabled();
-  });
-
-  it('offers undo on the newest operation only, and moves it down as they are undone', async () => {
-    const user = userEvent.setup();
-    const organization = new MemoryOrganizationClient();
-    const entry = (id: string, undoneAt: number | null) => ({
-      id, kind: 'sync' as const, createdAt: 100, tabs: [{ tabId: 1, windowId: 3, group: null }], undoneAt,
-    });
-    // Newest first, which is the order the background stores them in.
-    organization.state = { ...organization.state, history: [entry('newer', null), entry('older', null)] };
-    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'History' }));
-
-    expect(screen.getByText('Only the most recent organization can be undone.')).toBeVisible();
-    const [newest, older] = screen.getAllByRole('button', { name: 'Undo' });
-    expect(newest).toBeEnabled();
-    // The background refuses this one, so the interface must not offer it.
-    expect(older).toBeDisabled();
-
-    organization.state = { ...organization.state, history: [entry('newer', 200), entry('older', null)] };
-    await user.click(newest as HTMLElement);
-
-    // Undoing the top of the stack promotes the one beneath it.
-    expect(await screen.findByRole('button', { name: 'Undone' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Undo' })).toBeEnabled();
-  });
-
-  it('disables repeated undo submission while the operation is pending', async () => {
-    const user = userEvent.setup();
-    const organization = new MemoryOrganizationClient();
-    organization.state = {
-      ...organization.state,
-      history: [{
-        id: 'history-1', kind: 'sync', createdAt: 100,
-        tabs: [{ tabId: 1, windowId: 3, group: null }], undoneAt: null,
-      }],
-    };
-    let resolveUndo: ((outcome: { state: OrganizationState; restored: number; skipped: number }) => void) | undefined;
-    organization.undo = async (operationId) => {
-      organization.undoneIds.push(operationId);
-      return new Promise((resolve) => { resolveUndo = resolve; });
-    };
-    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
-    await user.click(await screen.findByRole('button', { name: 'History' }));
-    const undo = screen.getByRole('button', { name: 'Undo' });
-
-    await user.click(undo);
-    expect(undo).toBeDisabled();
-    await user.click(undo);
-    expect(organization.undoneIds).toEqual(['history-1']);
-    resolveUndo?.({
-      state: {
-        ...organization.state,
-        history: organization.state.history.map((operation) => ({ ...operation, undoneAt: 200 })),
-      },
-      restored: 1,
-      skipped: 0,
-    });
-    expect(await screen.findByRole('button', { name: 'Undone' })).toBeDisabled();
   });
 
   it('accepts a proposal in the shape the background actually sends', async () => {

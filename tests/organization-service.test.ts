@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import type { FirstPageOrganizer } from '../src/background/first-page-organizer';
-import type { HistoryRestorer, HistoryStore } from '../src/background/history-store';
 import { OrganizationService, type ActiveTabPlatform } from '../src/background/organization-service';
 import type { PresetStore } from '../src/background/preset-store';
 import type { SynchronizationService } from '../src/background/synchronization-service';
@@ -27,8 +26,6 @@ describe('OrganizationService', () => {
       { list: async () => [{ tabId: 1, lockedAt: 100, changed: false }] } as unknown as TabLockStore,
       { listFailedTabIds: async () => [2] } as unknown as FirstPageOrganizer,
       {} as SynchronizationService,
-      { list: async () => [] } as unknown as HistoryStore,
-      {} as HistoryRestorer,
       tabs,
     );
 

@@ -1,7 +1,7 @@
 import type { OrganizationState } from '../background/organization-service';
 import type { OrganizationRequest, OrganizationResponse } from '../background/organization-messages';
 import type { PresetDraft } from '../background/preset-store';
-import type { SynchronizationProposal } from '../background/synchronization-service';
+import type { ApplyResult, SynchronizationProposal } from '../background/synchronization-service';
 
 /**
  * What the background has for the review section right now.
@@ -14,18 +14,12 @@ export interface ReviewStatus {
   reviewing: boolean;
 }
 
-/** What an undo managed to put back, and what it had to leave alone. */
-export interface UndoResult {
-  state: OrganizationState;
-  restored: number;
-  skipped: number;
-}
-
 export interface OrganizationClient {
   getState(): Promise<OrganizationState>;
   createPreset(draft: PresetDraft): Promise<OrganizationState>;
   updatePreset(id: string, draft: PresetDraft): Promise<OrganizationState>;
   deletePreset(id: string): Promise<OrganizationState>;
+  reorderPresets(orderedIds: readonly string[]): Promise<OrganizationState>;
   lockActiveTab(): Promise<OrganizationState>;
   lockTab(tabId: number): Promise<OrganizationState>;
   unlockTab(tabId: number): Promise<OrganizationState>;
@@ -33,8 +27,7 @@ export interface OrganizationClient {
   retryFirstPage(tabId: number): Promise<OrganizationState>;
   review(scope: 'all' | 'current'): Promise<SynchronizationProposal>;
   reviewStatus(): Promise<ReviewStatus>;
-  apply(proposalId: string, selectedTabIds: number[]): Promise<{ applied: number; skipped: number }>;
-  undo(operationId: string): Promise<UndoResult>;
+  apply(proposalId: string, selectedTabIds: number[]): Promise<ApplyResult>;
 }
 
 export type OrganizationRuntimeMessenger = (request: OrganizationRequest) => Promise<unknown>;
@@ -46,19 +39,12 @@ export class RuntimeOrganizationClient implements OrganizationClient {
   createPreset(draft: PresetDraft) { return this.requestState({ type: 'presets/create', draft }); }
   updatePreset(id: string, draft: PresetDraft) { return this.requestState({ type: 'presets/update', id, draft }); }
   deletePreset(id: string) { return this.requestState({ type: 'presets/delete', id }); }
+  reorderPresets(orderedIds: readonly string[]) { return this.requestState({ type: 'presets/reorder', orderedIds: [...orderedIds] }); }
   lockActiveTab() { return this.requestState({ type: 'locks/lock-active' }); }
   lockTab(tabId: number) { return this.requestState({ type: 'locks/lock', tabId }); }
   unlockTab(tabId: number) { return this.requestState({ type: 'locks/unlock', tabId }); }
   unlockAndAnalyze(tabId: number) { return this.requestState({ type: 'locks/unlock-and-analyze', tabId }); }
   retryFirstPage(tabId: number) { return this.requestState({ type: 'automatic/retry', tabId }); }
-
-  async undo(operationId: string): Promise<UndoResult> {
-    const response = await this.request({ type: 'history/undo', operationId });
-    if (!isOrganizationState(response.state) || !isUndoCounts(response.undoResult)) {
-      throw new Error('organization_request_failed');
-    }
-    return { state: response.state, ...response.undoResult };
-  }
 
   async review(scope: 'all' | 'current'): Promise<SynchronizationProposal> {
     const response = await this.request({ type: 'sync/review', scope });
@@ -100,7 +86,6 @@ function isOrganizationState(value: unknown): value is OrganizationState {
   return (
     Array.isArray(value.presets) && value.presets.every(isPreset) &&
     Array.isArray(value.locks) && value.locks.every(isLock) &&
-    Array.isArray(value.history) && value.history.every(isHistoryOperation) &&
     Array.isArray(value.failedTabIds) && value.failedTabIds.every(isNumber) &&
     Array.isArray(value.tabSummaries) && value.tabSummaries.every(isTabSummary)
   );
@@ -137,12 +122,11 @@ function isSynchronizationChange(value: unknown): boolean {
     (value.target.description === null || typeof value.target.description === 'string');
 }
 
-function isUndoCounts(value: unknown): value is { restored: number; skipped: number } {
-  return isRecord(value) && typeof value.restored === 'number' && typeof value.skipped === 'number';
-}
-
-function isApplyResult(value: unknown): value is { applied: number; skipped: number } {
-  return isRecord(value) && typeof value.applied === 'number' && typeof value.skipped === 'number';
+function isApplyResult(value: unknown): value is ApplyResult {
+  return isRecord(value) && typeof value.applied === 'number' &&
+    typeof value.skipped === 'number' &&
+    (value.sortOutcome === null || value.sortOutcome === 'move_refused' ||
+      value.sortOutcome === 'unavailable');
 }
 
 function isPreset(value: unknown): boolean {
@@ -156,15 +140,6 @@ function isLock(value: unknown): boolean {
     typeof value.lockedAt === 'number' && typeof value.changed === 'boolean';
 }
 
-function isHistoryOperation(value: unknown): boolean {
-  return isRecord(value) && typeof value.id === 'string' &&
-    (value.kind === 'automatic' || value.kind === 'sync') &&
-    typeof value.createdAt === 'number' &&
-    (value.undoneAt === null || typeof value.undoneAt === 'number') &&
-    Array.isArray(value.tabs) && value.tabs.every((tab) => isRecord(tab) &&
-      typeof tab.tabId === 'number' && typeof tab.windowId === 'number' &&
-      (tab.group === null || isGroupDescriptor(tab.group)));
-}
 
 function isGroupDescriptor(value: unknown): boolean {
   return isRecord(value) && typeof value.title === 'string' && isGroupColor(value.color);

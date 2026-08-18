@@ -64,6 +64,29 @@ export class PresetStore {
     });
   }
 
+  /**
+   * Rewrites the stored order of the presets.
+   *
+   * The list has always been ordered; nothing read that order until groups started being placed by
+   * it. Ids missing from the request keep their relative order at the end, so a reorder racing with
+   * a create cannot drop the new preset.
+   */
+  async reorder(orderedIds: readonly string[]): Promise<Preset[]> {
+    return this.mutate(async (presets) => {
+      const seen = new Set<string>();
+      const ordered: Preset[] = [];
+      for (const id of orderedIds) {
+        const preset = presets.find((candidate) => candidate.id === id);
+        if (preset === undefined || seen.has(id)) continue;
+        seen.add(id);
+        ordered.push(preset);
+      }
+      const next = [...ordered, ...presets.filter((preset) => !seen.has(preset.id))];
+      await this.storage.set({ presets: next });
+      return next;
+    });
+  }
+
   async delete(id: string): Promise<boolean> {
     return this.mutate(async (presets) => {
       const next = presets.filter((preset) => preset.id !== id);

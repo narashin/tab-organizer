@@ -1,10 +1,4 @@
 import type { FirstPageOrganizer, OrganizableTab, TabGroupingPlatform } from './first-page-organizer';
-import type {
-  HistoryGroupState,
-  HistoryPlatform,
-  HistoryStore,
-  PriorTabState,
-} from './history-store';
 import type { ActiveTabPlatform } from './organization-service';
 import type { GroupColor, PresetStore } from './preset-store';
 import type { SynchronizationPlatform } from './synchronization-service';
@@ -24,8 +18,10 @@ export class ChromeSynchronizationPlatform implements SynchronizationPlatform, T
     }]);
   }
 
-  async moveTab(tabId: number, index: number): Promise<void> {
-    await chrome.tabs.move(tabId, { index });
+  async moveTabs(tabIds: number[], index: number): Promise<void> {
+    if (tabIds.length === 0) return;
+    // One call for the whole block: moving a Split View pair one tab at a time would separate them.
+    await chrome.tabs.move(tabIds, { index });
   }
 
   async moveGroup(groupId: number, index: number): Promise<void> {
@@ -93,29 +89,10 @@ export class ChromeSynchronizationPlatform implements SynchronizationPlatform, T
   }
 }
 
-export class ChromeHistoryPlatform implements HistoryPlatform {
-  constructor(private readonly tabs: ChromeSynchronizationPlatform) {}
-  async listTabs(windowIds: readonly number[]) {
-    const tabs = await Promise.all(windowIds.map((windowId) => chrome.tabs.query({ windowId })));
-    return tabs.flatMap((windowTabs) => windowTabs.map(toBrowserTab).filter(isDefined));
-  }
-  listGroups(windowId: number) { return this.tabs.listGroups(windowId); }
-  moveToExistingGroup(tabIds: number[], groupId: number) { return this.tabs.moveToExistingGroup(tabIds, groupId); }
-  async moveToNewGroup(tabIds: number[], windowId: number, title: string, color: GroupColor) {
-    await this.tabs.moveToNewGroup(tabIds, windowId, title, color);
-  }
-  async ungroup(tabIds: number[]) {
-    const firstTabId = tabIds[0];
-    if (firstTabId === undefined) return;
-    await chrome.tabs.ungroup([firstTabId, ...tabIds.slice(1)]);
-  }
-}
-
 export class ChromeFirstPagePlatform implements TabGroupingPlatform {
   constructor(
     private readonly tabs: ChromeSynchronizationPlatform,
     private readonly presets: PresetStore,
-    private readonly history: HistoryStore,
   ) {}
 
   listGroups(windowId: number) { return this.tabs.listGroups(windowId); }
@@ -133,13 +110,7 @@ export class ChromeFirstPagePlatform implements TabGroupingPlatform {
     if (tab === null) throw new Error('tab_missing');
     const target = (await this.tabs.listGroups(tab.windowId)).find((group) => group.groupId === groupId);
     if (target === undefined) throw new Error('group_missing');
-    const operation = await this.recordPrior(tab, {
-      groupId: target.groupId,
-      title: target.title,
-      color: target.color,
-    });
     await this.tabs.moveToExistingGroup([tabId], groupId);
-    await this.history.markStatus(operation.id, 'completed');
   }
 
   async moveToPreset(tabId: number, windowId: number, presetId: string) {
@@ -150,39 +121,13 @@ export class ChromeFirstPagePlatform implements TabGroupingPlatform {
     );
     const tab = await this.tabs.getTab(tabId);
     if (tab === null) throw new Error('tab_missing');
-    const operation = await this.recordPrior(tab, {
-      ...(group === undefined ? {} : { groupId: group.groupId }),
-      title: preset.name,
-      color: preset.color,
-    });
     if (group === undefined) {
-      const groupId = await this.tabs.moveToNewGroup([tabId], windowId, preset.name, preset.color);
-      await this.history.setExpectedGroupId(operation.id, [tabId], groupId);
-    } else {
-      await this.tabs.moveToExistingGroup([tabId], group.groupId);
+      await this.tabs.moveToNewGroup([tabId], windowId, preset.name, preset.color);
+      return;
     }
-    await this.history.markStatus(operation.id, 'completed');
+    await this.tabs.moveToExistingGroup([tabId], group.groupId);
   }
 
-  private async recordPrior(
-    tab: NonNullable<Awaited<ReturnType<ChromeSynchronizationPlatform['getTab']>>>,
-    expectedGroup: HistoryGroupState,
-  ) {
-    const group = tab.groupId < 0
-      ? null
-      : (await this.tabs.listGroups(tab.windowId)).find((item) => item.groupId === tab.groupId);
-    const prior: PriorTabState = {
-      tabId: tab.tabId,
-      windowId: tab.windowId,
-      group: group === undefined || group === null ? null : {
-        groupId: group.groupId,
-        title: group.title,
-        color: group.color,
-      },
-      expectedGroup,
-    };
-    return this.history.record('automatic', [prior]);
-  }
 }
 
 async function restoreChromeGroups(

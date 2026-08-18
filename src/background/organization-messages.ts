@@ -1,12 +1,13 @@
 import type { OrganizationService, OrganizationState } from './organization-service';
 import type { GroupColor, PresetDraft } from './preset-store';
-import type { SynchronizationProposal } from './synchronization-service';
+import type { ApplyResult, SynchronizationProposal } from './synchronization-service';
 
 export type OrganizationRequest =
   | { type: 'organization/get' }
   | { type: 'presets/create'; draft: PresetDraft }
   | { type: 'presets/update'; id: string; draft: PresetDraft }
   | { type: 'presets/delete'; id: string }
+  | { type: 'presets/reorder'; orderedIds: string[] }
   | { type: 'locks/lock-active' }
   | { type: 'locks/lock'; tabId: number }
   | { type: 'locks/unlock'; tabId: number }
@@ -14,16 +15,14 @@ export type OrganizationRequest =
   | { type: 'automatic/retry'; tabId: number }
   | { type: 'sync/review'; scope: 'all' | 'current' }
   | { type: 'sync/latest' }
-  | { type: 'sync/apply'; proposalId: string; selectedTabIds: number[] }
-  | { type: 'history/undo'; operationId: string };
+  | { type: 'sync/apply'; proposalId: string; selectedTabIds: number[] };
 
 export interface OrganizationResponse {
   ok: boolean;
   state?: OrganizationState;
   proposal?: SynchronizationProposal;
   reviewing?: boolean;
-  undoResult?: { restored: number; skipped: number };
-  applyResult?: { applied: number; skipped: number };
+  applyResult?: ApplyResult;
   error?: 'invalid_request' | 'operation_failed';
 }
 
@@ -42,6 +41,8 @@ export function createOrganizationMessageHandler(service: OrganizationService): 
           return { ok: true, state: await service.updatePreset(message.id, message.draft) };
         case 'presets/delete':
           return { ok: true, state: await service.deletePreset(message.id) };
+        case 'presets/reorder':
+          return { ok: true, state: await service.reorderPresets(message.orderedIds) };
         case 'locks/lock-active':
           return { ok: true, state: await service.lockActiveTab() };
         case 'locks/lock':
@@ -63,10 +64,6 @@ export function createOrganizationMessageHandler(service: OrganizationService): 
         }
         case 'sync/apply':
           return { ok: true, applyResult: await service.apply(message.proposalId, message.selectedTabIds) };
-        case 'history/undo': {
-          const { state, ...undoResult } = await service.undo(message.operationId);
-          return { ok: true, state, undoResult };
-        }
       }
     } catch {
       return { ok: false, error: 'operation_failed' };
@@ -87,6 +84,9 @@ function isOrganizationRequest(value: unknown): value is OrganizationRequest {
       return typeof value.id === 'string' && isPresetDraft(value.draft);
     case 'presets/delete':
       return typeof value.id === 'string';
+    case 'presets/reorder':
+      return Array.isArray(value.orderedIds) &&
+        value.orderedIds.every((id) => typeof id === 'string');
     case 'locks/unlock':
     case 'locks/lock':
     case 'locks/unlock-and-analyze':
@@ -97,8 +97,6 @@ function isOrganizationRequest(value: unknown): value is OrganizationRequest {
     case 'sync/apply':
       return typeof value.proposalId === 'string' &&
         Array.isArray(value.selectedTabIds) && value.selectedTabIds.every((id) => typeof id === 'number');
-    case 'history/undo':
-      return typeof value.operationId === 'string';
     default:
       return false;
   }

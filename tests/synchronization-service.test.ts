@@ -17,7 +17,6 @@ import {
   type SynchronizationPlatform,
 } from '../src/background/synchronization-service';
 import { TabLockStore } from '../src/background/tab-lock-store';
-import { HistoryStore } from '../src/background/history-store';
 
 class MemoryStorage implements LocalStorageArea {
   readonly values: StoredValues = {};
@@ -86,11 +85,10 @@ function createHarness() {
   const platform = new RecordingPlatform();
   const presets = new PresetStore(local, () => 'preset-1');
   const locks = new TabLockStore(session, () => 100);
-  const history = new HistoryStore(local, () => 'history-1', () => 100);
   const service = new SynchronizationService(
-    classifier, presets, locks, history, platform, () => 'en', () => 'proposal-1', session,
+    classifier, presets, locks, platform, () => 'en', () => 'proposal-1', session,
   );
-  return { service, classifier, platform, locks, history, presets, session };
+  return { service, classifier, platform, locks, presets, session };
 }
 
 describe('SynchronizationService', () => {
@@ -109,7 +107,7 @@ describe('SynchronizationService', () => {
   });
 
   it('reviews all normal windows separately and applies only selected, valid same-window tabs', async () => {
-    const { service, classifier, platform, history } = createHarness();
+    const { service, classifier, platform } = createHarness();
     const proposal = await service.review('all');
     platform.closedTabs.add(5);
 
@@ -123,9 +121,8 @@ describe('SynchronizationService', () => {
       'tab-5',
     ]);
     expect(JSON.stringify(classifier.requests)).not.toContain('Private');
-    expect(result).toEqual({ applied: 1, skipped: 1 });
+    expect(result).toEqual({ applied: 1, skipped: 1, sortOutcome: null });
     expect(platform.actions).toEqual(['new:4:10:Suggested']);
-    expect(await history.list()).toMatchObject([{ status: 'completed' }]);
   });
 
   it('hands back a pending proposal from storage alone and drops it once applied', async () => {
@@ -183,7 +180,7 @@ describe('SynchronizationService', () => {
     };
     const build = () => new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'colors',
+      platform, () => 'en', () => 'colors',
     );
 
     const proposal = await build().review('current');
@@ -244,14 +241,14 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, presets, new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'dedup',
+      platform, () => 'en', () => 'dedup',
       session,
     );
 
     const proposal = await service.review('current');
     const result = await service.apply(proposal.id, [21, 22]);
 
-    expect(result).toEqual({ applied: 2, skipped: 0 });
+    expect(result).toEqual({ applied: 2, skipped: 0, sortOutcome: null });
     // Both tabs land in the group that already had the name; nothing new is created.
     expect(actions).toEqual(['existing:21,22:500']);
     expect(proposal.changes.map((change) => change.target.title)).toEqual(['ATLAS', 'ATLAS']);
@@ -296,7 +293,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'chunked',
+      platform, () => 'en', () => 'chunked',
       session,
     );
 
@@ -331,7 +328,6 @@ describe('SynchronizationService', () => {
       classifier,
       new PresetStore(local, () => 'preset'),
       new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1),
       platform,
       () => 'en',
       () => 'proposal',
@@ -375,7 +371,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'large',
+      platform, () => 'en', () => 'large',
     );
 
     const proposal = await service.review('all');
@@ -422,7 +418,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'isolated',
+      platform, () => 'en', () => 'isolated',
     );
 
     const proposal = await service.review('all');
@@ -469,7 +465,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'retried',
+      platform, () => 'en', () => 'retried',
     );
 
     const proposal = await service.review('all');
@@ -503,7 +499,7 @@ describe('SynchronizationService', () => {
     };
     const build = (sendPath: boolean) => new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'paths',
+      platform, () => 'en', () => 'paths',
       session, undefined, () => 'balanced', () => sendPath,
     );
 
@@ -546,7 +542,7 @@ describe('SynchronizationService', () => {
     await presets.create({ name: 'ATLAS', description: 'ATLAS tickets', cues: ['ATLAS-'], color: 'blue' });
     const service = new SynchronizationService(
       classifier, presets, new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'cued',
+      platform, () => 'en', () => 'cued',
     );
 
     const proposal = await service.review('all');
@@ -587,7 +583,7 @@ describe('SynchronizationService', () => {
     await presets.create({ name: 'ATLAS', description: 'ATLAS only', cues: ['ATLAS-'], color: 'blue' });
     const service = new SynchronizationService(
       classifier, presets, new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'specific',
+      platform, () => 'en', () => 'specific',
     );
 
     const proposal = await service.review('all');
@@ -629,7 +625,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'sized',
+      platform, () => 'en', () => 'sized',
     );
 
     const proposal = await service.review('all');
@@ -667,7 +663,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'existing',
+      platform, () => 'en', () => 'existing',
     );
 
     const proposal = await service.review('all');
@@ -709,7 +705,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'merged',
+      platform, () => 'en', () => 'merged',
     );
 
     const proposal = await service.review('all');
@@ -749,7 +745,7 @@ describe('SynchronizationService', () => {
     await presets.create({ name: 'Work', description: 'Company work', cues: [], color: 'green' });
     const service = new SynchronizationService(
       classifier, presets, new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'demoted',
+      platform, () => 'en', () => 'demoted',
     );
 
     const proposal = await service.review('all');
@@ -797,7 +793,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'guarded',
+      platform, () => 'en', () => 'guarded',
       session, planner,
     );
 
@@ -850,7 +846,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'planned',
+      platform, () => 'en', () => 'planned',
       session, planner,
     );
 
@@ -904,7 +900,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'replanned',
+      platform, () => 'en', () => 'replanned',
       session, planner,
     );
 
@@ -947,7 +943,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'fallback',
+      platform, () => 'en', () => 'fallback',
       session, planner,
     );
 
@@ -1001,7 +997,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'planned',
+      platform, () => 'en', () => 'planned',
       session, planner,
     );
     return service.review('all');
@@ -1019,12 +1015,12 @@ describe('SynchronizationService', () => {
           .map((tab, index) => ({
             tabId: tab.tabId, index, pinned: false, groupId: -1, title: tab.title,
           })),
-        moveTab: async (tabId: number, index: number) => { moves.push(`tab:${tabId}:${index}`); },
+        moveTabs: async (tabIds: number[], index: number) => { moves.push(`tab:${tabIds.join(',')}:${index}`); },
         moveGroup: async (groupId: number, index: number) => { moves.push(`group:${groupId}:${index}`); },
       };
       const service = new SynchronizationService(
         new RecordingClassifier(), new PresetStore(local, () => 'preset'),
-        new TabLockStore(session, () => 1), new HistoryStore(local, () => 'history', () => 1),
+        new TabLockStore(session, () => 1),
         platform, () => 'en', () => 'sorted', session, undefined, undefined, undefined,
         () => sortEnabled, tabOrder,
       );
@@ -1043,6 +1039,104 @@ describe('SynchronizationService', () => {
     await on.service.apply(onProposal.id, [3, 4]);
 
     expect(on.moves.length).toBeGreaterThan(0);
+  });
+
+  it('sorts a window whose changes all fell away, since the request was to sort it', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const platform = new RecordingPlatform();
+    const moves: string[] = [];
+    const tabOrder = {
+      listWindowTabs: async (windowId: number) => platform.currentTabs
+        .filter((tab) => tab.windowId === windowId)
+        .map((tab, index) => ({
+          tabId: tab.tabId, index, pinned: false, groupId: -1, title: tab.title,
+        })),
+      moveTabs: async (tabIds: number[], index: number) => { moves.push(`tab:${tabIds.join(',')}:${index}`); },
+      moveGroup: async () => undefined,
+    };
+    const service = new SynchronizationService(
+      new RecordingClassifier(), new PresetStore(local, () => 'preset'),
+      new TabLockStore(session, () => 1),
+      platform, () => 'en', () => 'stale', session, undefined, undefined, undefined,
+      () => true, tabOrder,
+    );
+    const proposal = await service.review('current');
+    // Everything the user selected moved elsewhere before Apply landed.
+    platform.closedTabs.add(3);
+    platform.closedTabs.add(4);
+
+    const result = await service.apply(proposal.id, [3, 4]);
+
+    expect(result).toMatchObject({ applied: 0 });
+    expect(moves.length).toBeGreaterThan(0);
+  });
+
+  it('sorts a window that holds a Split View pair, moving the pair as one block', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const platform = new RecordingPlatform();
+    const moves: string[] = [];
+    const tabOrder = {
+      listWindowTabs: async (windowId: number) => platform.currentTabs
+        .filter((tab) => tab.windowId === windowId)
+        .map((tab, index) => ({
+          tabId: tab.tabId,
+          index,
+          pinned: false,
+          groupId: -1,
+          title: tab.title,
+          // Tab 3 of the fixture window sits in Split View.
+          ...(tab.tabId === 3 ? { splitViewId: 7 } : {}),
+        })),
+      moveTabs: async (tabIds: number[], index: number) => { moves.push(`tab:${tabIds.join(',')}:${index}`); },
+      moveGroup: async () => undefined,
+    };
+    const service = new SynchronizationService(
+      new RecordingClassifier(), new PresetStore(local, () => 'preset'),
+      new TabLockStore(session, () => 1),
+      platform, () => 'en', () => 'split', session, undefined, undefined, undefined,
+      () => true, tabOrder,
+    );
+    const proposal = await service.review('current');
+
+    const result = await service.apply(proposal.id, [4]);
+
+    // Skipping the window was the old answer, and it left everything else unsorted too.
+    expect(result.sortOutcome).toBeNull();
+    expect(moves.some((move) => move.startsWith('tab:3:'))).toBe(true);
+  });
+
+  it('keeps sorting the rest of a window after Chrome refuses one move', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const platform = new RecordingPlatform();
+    const moves: string[] = [];
+    const tabOrder = {
+      listWindowTabs: async (windowId: number) => platform.currentTabs
+        .filter((tab) => tab.windowId === windowId)
+        .map((tab, index) => ({
+          tabId: tab.tabId, index, pinned: false, groupId: -1, title: tab.title,
+        })),
+      moveTabs: async (tabIds: number[], index: number) => {
+        // One refusal used to abandon the window, leaving a half-sorted strip and no explanation.
+        if (tabIds.includes(3)) throw new Error('Tabs cannot be edited right now');
+        moves.push(`tab:${tabIds.join(',')}:${index}`);
+      },
+      moveGroup: async () => undefined,
+    };
+    const service = new SynchronizationService(
+      new RecordingClassifier(), new PresetStore(local, () => 'preset'),
+      new TabLockStore(session, () => 1),
+      platform, () => 'en', () => 'refused', session, undefined, undefined, undefined,
+      () => true, tabOrder,
+    );
+    const proposal = await service.review('current');
+
+    const result = await service.apply(proposal.id, [4]);
+
+    expect(result.sortOutcome).toBe('move_refused');
+    expect(moves.length).toBeGreaterThan(0);
   });
 
   it('reports a run as in flight only while it is actually running', async () => {
@@ -1065,7 +1159,7 @@ describe('SynchronizationService', () => {
     const service = new SynchronizationService(
       { classify: async () => { throw new Error('classification_failed'); } },
       new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), new RecordingPlatform(),
+      new RecordingPlatform(),
       () => 'en', () => 'failed', session,
     );
 
@@ -1110,7 +1204,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       new RecordingClassifier(), new PresetStore(local, () => 'preset'),
-      new TabLockStore(session, () => 1), new HistoryStore(local, () => 'history', () => 1),
+      new TabLockStore(session, () => 1),
       platform, () => 'en', () => 'unplanned', session, planner,
     );
 
@@ -1147,7 +1241,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       new RecordingClassifier(), new PresetStore(local, () => 'preset'),
-      new TabLockStore(session, () => 1), new HistoryStore(local, () => 'history', () => 1),
+      new TabLockStore(session, () => 1),
       platform, () => 'en', () => 'timed-out', session, planner,
     );
 
@@ -1182,7 +1276,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       new RecordingClassifier(), new PresetStore(local, () => 'preset'),
-      new TabLockStore(session, () => 1), new HistoryStore(local, () => 'history', () => 1),
+      new TabLockStore(session, () => 1),
       platform, () => 'en', () => 'empty-plan', session, planner,
     );
 
@@ -1264,7 +1358,7 @@ describe('SynchronizationService', () => {
     session.values.synchronizationProposal = stored;
     const service = new SynchronizationService(
       new RecordingClassifier(), new PresetStore(local, () => 'preset'),
-      new TabLockStore(session, () => 1), new HistoryStore(local, () => 'history', () => 1),
+      new TabLockStore(session, () => 1),
       new RecordingPlatform(), () => 'en', () => 'proposal-1', session,
     );
 
@@ -1312,7 +1406,7 @@ describe('SynchronizationService', () => {
     await presets.create({ name: 'Work', description: 'Company work', cues: [], color: 'green' });
     const service = new SynchronizationService(
       classifier, presets, new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'chunked',
+      platform, () => 'en', () => 'chunked',
     );
 
     const proposal = await service.review('all');
@@ -1367,7 +1461,7 @@ describe('SynchronizationService', () => {
     };
     const service = new SynchronizationService(
       classifier, new PresetStore(local, () => 'preset'), new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history', () => 1), platform, () => 'en', () => 'ordered',
+      platform, () => 'en', () => 'ordered',
     );
 
     const proposal = await service.review('all');
@@ -1377,15 +1471,14 @@ describe('SynchronizationService', () => {
   });
 
   it('skips a tab that the user locks after review and before apply', async () => {
-    const { service, platform, locks, history } = createHarness();
+    const { service, platform, locks } = createHarness();
     const proposal = await service.review('current');
     await locks.lock(4);
 
     const result = await service.apply(proposal.id, [4]);
 
-    expect(result).toEqual({ applied: 0, skipped: 1 });
+    expect(result).toEqual({ applied: 0, skipped: 1, sortOutcome: null });
     expect(platform.actions).toEqual([]);
-    expect(await history.list()).toEqual([]);
   });
 
   it.each([
@@ -1395,7 +1488,7 @@ describe('SynchronizationService', () => {
     { name: 'group', patch: { groupId: 9 } },
     { name: 'Split View', patch: { splitViewId: 4 } },
   ])('skips a tab whose $name changed after review', async ({ patch }) => {
-    const { service, platform, history } = createHarness();
+    const { service, platform } = createHarness();
     const proposal = await service.review('current');
     platform.currentTabs = platform.currentTabs.map((tab) => tab.tabId === 4
       ? { ...tab, ...patch }
@@ -1403,9 +1496,8 @@ describe('SynchronizationService', () => {
 
     const result = await service.apply(proposal.id, [4]);
 
-    expect(result).toEqual({ applied: 0, skipped: 1 });
+    expect(result).toEqual({ applied: 0, skipped: 1, sortOutcome: null });
     expect(platform.actions).toEqual([]);
-    expect(await history.list()).toEqual([]);
   });
 
   it('batches existing-group and preset targets into one same-window group move', async () => {
@@ -1448,7 +1540,6 @@ describe('SynchronizationService', () => {
       classifier,
       presets,
       new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history-1', () => 1),
       platform,
       () => 'en',
       () => 'proposal-1',
@@ -1457,7 +1548,7 @@ describe('SynchronizationService', () => {
     const proposal = await service.review('current');
     const result = await service.apply(proposal.id, largeTabs.map((tab) => tab.tabId));
 
-    expect(result).toEqual({ applied: 100, skipped: 0 });
+    expect(result).toEqual({ applied: 100, skipped: 0, sortOutcome: null });
     expect(groupQueries).toBe(3);
     expect(moveCalls).toHaveLength(1);
     expect(moveCalls[0]).toHaveLength(100);
@@ -1471,7 +1562,6 @@ describe('SynchronizationService', () => {
       new RecordingClassifier(),
       new PresetStore(local, () => 'preset-1'),
       new TabLockStore(session, () => 1),
-      new HistoryStore(local, () => 'history-1', () => 1),
       new RecordingPlatform(),
       () => 'en',
       () => `proposal-${nextId += 1}`,
@@ -1484,18 +1574,18 @@ describe('SynchronizationService', () => {
   });
 
   it('rehydrates the latest proposal after service reconstruction', async () => {
-    const { service, classifier, platform, locks, history, presets, session } = createHarness();
+    const { service, classifier, platform, locks, presets, session } = createHarness();
     const proposal = await service.review('current');
     const restarted = new SynchronizationService(
-      classifier, presets, locks, history, platform, () => 'en', () => 'unused', session,
+      classifier, presets, locks, platform, () => 'en', () => 'unused', session,
     );
 
-    await expect(restarted.apply(proposal.id, [4])).resolves.toEqual({ applied: 1, skipped: 0 });
+    await expect(restarted.apply(proposal.id, [4])).resolves.toEqual({ applied: 1, skipped: 0, sortOutcome: null });
     expect(platform.actions).toEqual(['new:4:10:Suggested']);
   });
 
   it('coalesces duplicate apply requests for the same proposal', async () => {
-    const { service, platform, history } = createHarness();
+    const { service, platform } = createHarness();
     const proposal = await service.review('current');
     const originalMove = platform.moveToNewGroup.bind(platform);
     let releaseMove: (() => void) | undefined;
@@ -1513,15 +1603,14 @@ describe('SynchronizationService', () => {
     releaseMove?.();
 
     await expect(Promise.all([first, second])).resolves.toEqual([
-      { applied: 1, skipped: 0 },
-      { applied: 1, skipped: 0 },
+      { applied: 1, skipped: 0, sortOutcome: null },
+      { applied: 1, skipped: 0, sortOutcome: null },
     ]);
     expect(moveCalls).toBe(1);
-    expect(await history.list()).toHaveLength(1);
   });
 
   it('continues independent group mutations and records a partial operation after one fails', async () => {
-    const { service, platform, history } = createHarness();
+    const { service, platform } = createHarness();
     const proposal = await service.review('all');
     const move = platform.moveToNewGroup.bind(platform);
     platform.moveToNewGroup = async (tabIds, windowId, title) => {
@@ -1531,19 +1620,12 @@ describe('SynchronizationService', () => {
 
     const result = await service.apply(proposal.id, [4, 5]);
 
-    expect(result).toEqual({ applied: 1, skipped: 1 });
+    expect(result).toEqual({ applied: 1, skipped: 1, sortOutcome: null });
     expect(platform.actions).toEqual(['new:4:10:Suggested']);
-    expect(await history.list()).toMatchObject([{
-      status: 'partial',
-      tabs: [
-        { tabId: 4, expectedGroup: { title: 'Suggested', color: preferredGroupColor('Suggested') } },
-        { tabId: 5, expectedGroup: { title: 'Suggested', color: preferredGroupColor('Suggested') } },
-      ],
-    }]);
   });
 
   it('revalidates locks immediately before each group mutation bucket', async () => {
-    const { service, platform, locks, history } = createHarness();
+    const { service, platform, locks } = createHarness();
     const proposal = await service.review('all');
     const move = platform.moveToNewGroup.bind(platform);
     platform.moveToNewGroup = async (tabIds, windowId, title) => {
@@ -1554,9 +1636,8 @@ describe('SynchronizationService', () => {
 
     const result = await service.apply(proposal.id, [4, 5]);
 
-    expect(result).toEqual({ applied: 1, skipped: 1 });
+    expect(result).toEqual({ applied: 1, skipped: 1, sortOutcome: null });
     expect(platform.actions).toEqual(['new:4:10:Suggested']);
-    expect(await history.list()).toMatchObject([{ status: 'partial' }]);
   });
 
   it('serializes review behind an in-progress apply', async () => {
@@ -1585,47 +1666,15 @@ describe('SynchronizationService', () => {
     expect(classifier.requests).toHaveLength(2);
   });
 
-  it('persists the actual new Chrome group ID before completing history', async () => {
-    const { service, history } = createHarness();
-    const proposal = await service.review('current');
-
-    await service.apply(proposal.id, [4]);
-
-    expect(await history.list()).toMatchObject([{
-      status: 'completed',
-      tabs: [{ expectedGroup: { groupId: 77, title: 'Suggested', color: preferredGroupColor('Suggested') } }],
-    }]);
-  });
-
-  it('reports a successful move as applied when exact history group ID enrichment fails', async () => {
-    const { service, history, platform } = createHarness();
-    const proposal = await service.review('current');
-    history.setExpectedGroupId = async () => {
-      throw new Error('storage_unavailable');
-    };
-
-    await expect(service.apply(proposal.id, [4])).resolves.toEqual({
-      applied: 1,
-      skipped: 0,
-    });
-
-    expect(platform.actions).toEqual(['new:4:10:Suggested']);
-    expect(await history.list()).toMatchObject([{
-      status: 'completed',
-      tabs: [{ expectedGroup: { title: 'Suggested', color: preferredGroupColor('Suggested') } }],
-    }]);
-  });
 
   it('does not create a proposal, history, or tab mutation when classification fails', async () => {
     const local = new MemoryStorage();
     const session = new MemoryStorage();
     const platform = new RecordingPlatform();
-    const history = new HistoryStore(local, () => 'history-1', () => 1);
     const service = new SynchronizationService(
       { classify: async () => { throw new Error('classification_failed'); } },
       new PresetStore(local, () => 'preset-1'),
       new TabLockStore(session, () => 1),
-      history,
       platform,
       () => 'en',
       () => 'proposal-1',
@@ -1635,7 +1684,6 @@ describe('SynchronizationService', () => {
     await expect(service.review('all')).rejects.toThrow('classification_failed');
 
     expect(platform.actions).toEqual([]);
-    expect(await history.list()).toEqual([]);
     expect(session.values.synchronizationProposal).toBeUndefined();
   });
 });

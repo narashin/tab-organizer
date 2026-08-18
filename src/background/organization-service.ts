@@ -1,19 +1,11 @@
 import type { FirstPageOrganizer, OrganizableTab } from './first-page-organizer';
-import type { HistoryOperation, HistoryRestorer, HistoryStore } from './history-store';
 import type { Preset, PresetDraft, PresetStore } from './preset-store';
 import type { SynchronizationProposal, SynchronizationService } from './synchronization-service';
 import type { TabLock, TabLockStore } from './tab-lock-store';
 
-export interface UndoOutcome {
-  state: OrganizationState;
-  restored: number;
-  skipped: number;
-}
-
 export interface OrganizationState {
   presets: Preset[];
   locks: TabLock[];
-  history: HistoryOperation[];
   failedTabIds: number[];
   tabSummaries: OrganizationTabSummary[];
 }
@@ -35,16 +27,13 @@ export class OrganizationService {
     private readonly locks: TabLockStore,
     private readonly firstPage: FirstPageOrganizer,
     private readonly synchronization: SynchronizationService,
-    private readonly history: HistoryStore,
-    private readonly restorer: HistoryRestorer,
     private readonly tabs: ActiveTabPlatform,
   ) {}
 
   async getState(): Promise<OrganizationState> {
-    const [presets, locks, history, failedTabIds] = await Promise.all([
+    const [presets, locks, failedTabIds] = await Promise.all([
       this.presets.list(),
       this.locks.list(),
-      this.history.list(),
       this.firstPage.listFailedTabIds(),
     ]);
     const tabIds = [...new Set([...locks.map((lock) => lock.tabId), ...failedTabIds])];
@@ -59,7 +48,6 @@ export class OrganizationService {
     return {
       presets,
       locks,
-      history,
       failedTabIds,
       tabSummaries: summaries.filter(isDefined),
     };
@@ -72,6 +60,11 @@ export class OrganizationService {
 
   async updatePreset(id: string, draft: PresetDraft): Promise<OrganizationState> {
     await this.presets.update(id, draft);
+    return this.getState();
+  }
+
+  async reorderPresets(orderedIds: readonly string[]): Promise<OrganizationState> {
+    await this.presets.reorder(orderedIds);
     return this.getState();
   }
 
@@ -132,16 +125,6 @@ export class OrganizationService {
     return this.synchronization.apply(proposalId, selectedTabIds);
   }
 
-  /**
-   * Reverts an operation and says how much of it could be reverted.
-   *
-   * The counts used to be discarded, so an undo that restored nothing looked exactly like one that
-   * restored everything.
-   */
-  async undo(operationId: string): Promise<UndoOutcome> {
-    const result = await this.restorer.undo(operationId);
-    return { state: await this.getState(), ...result };
-  }
 }
 
 function getHostname(value: string): string {

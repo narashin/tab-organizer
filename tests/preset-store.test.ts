@@ -91,4 +91,31 @@ describe('PresetStore', () => {
     await expect(store.list()).resolves.toEqual([]);
     expect(PresetValidationError).toBeDefined();
   });
+
+  it('rewrites the stored order and keeps presets the request forgot', async () => {
+    const storage = new MemoryStorage();
+    let next = 0;
+    const store = new PresetStore(storage, () => `preset-${next += 1}`);
+    await store.create({ name: 'Alfa', description: 'A', cues: [], color: 'blue' });
+    await store.create({ name: 'Zulu', description: 'Z', cues: [], color: 'green' });
+    await store.create({ name: 'Mike', description: 'M', cues: [], color: 'red' });
+
+    // A reorder racing with a create must not drop the preset it never saw.
+    const ordered = await store.reorder(['preset-3', 'preset-1']);
+
+    expect(ordered.map((preset) => preset.name)).toEqual(['Mike', 'Alfa', 'Zulu']);
+    expect((await store.list()).map((preset) => preset.name)).toEqual(['Mike', 'Alfa', 'Zulu']);
+  });
+
+  it('ignores unknown and repeated ids in a reorder', async () => {
+    const storage = new MemoryStorage();
+    let next = 0;
+    const store = new PresetStore(storage, () => `preset-${next += 1}`);
+    await store.create({ name: 'Alfa', description: 'A', cues: [], color: 'blue' });
+    await store.create({ name: 'Zulu', description: 'Z', cues: [], color: 'green' });
+
+    const ordered = await store.reorder(['preset-2', 'preset-2', 'missing', 'preset-1']);
+
+    expect(ordered.map((preset) => preset.name)).toEqual(['Zulu', 'Alfa']);
+  });
 });

@@ -1,6 +1,5 @@
-import { ChromeActiveTabPlatform, ChromeFirstPagePlatform, ChromeHistoryPlatform, ChromeSynchronizationPlatform, registerTabLifecycle } from './chrome-platform';
+import { ChromeActiveTabPlatform, ChromeFirstPagePlatform, ChromeSynchronizationPlatform, registerTabLifecycle } from './chrome-platform';
 import { FirstPageOrganizer } from './first-page-organizer';
-import { HistoryRestorer, HistoryStore } from './history-store';
 import {
   createClassifier,
   createTaxonomyPlanner,
@@ -24,21 +23,17 @@ export function createChromeOrganizationHandler(settings: SettingsService) {
   const createId = () => crypto.randomUUID();
   const presets = new PresetStore(local, createId);
   const locks = new TabLockStore(session, Date.now);
-  const history = new HistoryStore(local, createId, Date.now);
   const chromeTabs = new ChromeSynchronizationPlatform();
-  const historyPlatform = new ChromeHistoryPlatform(chromeTabs);
-  const firstPagePlatform = new ChromeFirstPagePlatform(chromeTabs, presets, history);
+  const firstPagePlatform = new ChromeFirstPagePlatform(chromeTabs, presets);
   let locale: SupportedLocale = 'en';
   let granularity: GroupingGranularity = DEFAULT_GROUPING_GRANULARITY;
   let sendPathEnabled = false;
-  let sortTabsEnabled = false;
 
   const resolveClassifier = async (): Promise<Classifier> => {
     const config = await settings.getOrganizationRuntimeConfig(chrome.i18n.getUILanguage());
     locale = config.locale;
     granularity = config.groupingGranularity;
     sendPathEnabled = config.sendPathEnabled;
-    sortTabsEnabled = config.sortTabsEnabled;
     if (!config.enabled || config.apiKey === null) throw new Error('organization_disabled');
     const classifier = createClassifier(config.provider, {
       apiKey: config.apiKey, model: config.model, baseUrl: config.baseUrl,
@@ -72,7 +67,6 @@ export function createChromeOrganizationHandler(settings: SettingsService) {
     dynamicClassifier,
     presets,
     locks,
-    history,
     chromeTabs,
     () => locale,
     createId,
@@ -80,17 +74,15 @@ export function createChromeOrganizationHandler(settings: SettingsService) {
     dynamicTaxonomyPlanner,
     () => granularity,
     () => sendPathEnabled,
-    () => sortTabsEnabled,
+    async () => (await settings.getOrganizationRuntimeConfig(chrome.i18n.getUILanguage()))
+      .sortTabsEnabled,
     chromeTabs,
   );
-  const restorer = new HistoryRestorer(history, historyPlatform);
   const service = new OrganizationService(
     presets,
     locks,
     firstPage,
     synchronization,
-    history,
-    restorer,
     new ChromeActiveTabPlatform(),
   );
   registerTabLifecycle(

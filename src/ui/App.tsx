@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type PointerEvent as ReactPointerEvent } from 'react';
 
 import type { OrganizationState } from '../background/organization-service';
-import { undoableOperationId } from '../background/history-store';
 import { normalizeGroupTitle } from '../background/synchronization-service';
 import type { GroupColor, PresetDraft } from '../background/preset-store';
 import type { SettingsState } from '../background/settings-service';
-import type { SynchronizationProposal } from '../background/synchronization-service';
+import type { ApplyResult, SynchronizationProposal } from '../background/synchronization-service';
 import {
   fillPlaceholders,
   translations,
@@ -42,7 +41,7 @@ export interface AppProps {
 
 type AppShell = 'popup' | 'panel';
 
-type Section = 'review' | 'presets' | 'locked' | 'history' | 'settings';
+type Section = 'review' | 'presets' | 'locked' | 'settings';
 
 const languageOptions: ReadonlyArray<{ value: LocaleSelection; labelKey: TranslationKey }> = [
   { value: 'system', labelKey: 'languageSystem' },
@@ -97,14 +96,15 @@ export function App({
   const [isReviewing, setIsReviewing] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
   const [isPresetSubmitting, setIsPresetSubmitting] = useState(false);
-  const [undoingOperationId, setUndoingOperationId] = useState<string | null>(null);
-  const [undoResult, setUndoResult] = useState<{ restored: number; skipped: number } | null>(null);
   const [savingPresetTitle, setSavingPresetTitle] = useState<string | null>(null);
+  const [draggingPresetId, setDraggingPresetId] = useState<string | null>(null);
+  const [selectedLockIds, setSelectedLockIds] = useState<number[]>([]);
+  const [isUnlocking, setIsUnlocking] = useState(false);
   const [loadFailed, setLoadFailed] = useState(false);
   const [organizationLoadFailed, setOrganizationLoadFailed] = useState(false);
   const [loadAttempt, setLoadAttempt] = useState(0);
   const [proposal, setProposal] = useState<SynchronizationProposal | null>(null);
-  const [applyResult, setApplyResult] = useState<{ applied: number; skipped: number } | null>(null);
+  const [applyResult, setApplyResult] = useState<ApplyResult | null>(null);
   const [notice, setNotice] = useState<'success' | 'error' | null>(null);
   const [editingPresetId, setEditingPresetId] = useState<string | null>(null);
   const [presetDraft, setPresetDraft] = useState<PresetDraft>({
@@ -171,8 +171,62 @@ export function App({
     return () => { active = false; clearInterval(timer); };
   }, [isReviewing, organizationClient]);
 
-  // The same rule the background enforces, so the interface cannot offer what would be refused.
-  const undoableId = undoableOperationId(organization?.history ?? []);
+  const locks = organization?.locks ?? [];
+  const allLocksSelected = locks.length > 0 &&
+    locks.every((lock) => selectedLockIds.includes(lock.tabId));
+
+  /**
+   * Unlocks every selected tab, optionally analyzing each as it is released.
+   *
+   * Sequential on purpose: each call answers with the whole organization state, and interleaving
+   * them would leave the list showing whichever reply happened to land last.
+   */
+  const unlockSelected = async (analyze: boolean): Promise<void> => {
+    if (organizationClient === undefined || selectedLockIds.length === 0) return;
+    setIsUnlocking(true);
+    await run(async () => {
+      try {
+        for (const tabId of selectedLockIds) {
+          setOrganization(analyze
+            ? await organizationClient.unlockAndAnalyze(tabId)
+            : await organizationClient.unlockTab(tabId));
+        }
+        setSelectedLockIds([]);
+      } finally {
+        setIsUnlocking(false);
+      }
+    });
+  };
+
+  /** Applies a new preset order, both for a drop and for the keyboard path. */
+  const commitPresetOrder = async (orderedIds: string[]): Promise<void> => {
+    if (organizationClient === undefined) return;
+    await run(async () => {
+      setOrganization(await organizationClient.reorderPresets(orderedIds));
+    });
+  };
+  const movePresetTo = async (targetId: string): Promise<void> => {
+    const ids = (organization?.presets ?? []).map((preset) => preset.id);
+    const from = ids.indexOf(draggingPresetId ?? '');
+    const to = ids.indexOf(targetId);
+    setDraggingPresetId(null);
+    if (from < 0 || to < 0 || from === to) return;
+    const next = [...ids];
+    next.splice(from, 1);
+    next.splice(to, 0, ids[from] ?? '');
+    await commitPresetOrder(next);
+  };
+  const movePresetBy = async (presetId: string, offset: number): Promise<void> => {
+    const ids = (organization?.presets ?? []).map((preset) => preset.id);
+    const from = ids.indexOf(presetId);
+    const to = from + offset;
+    if (from < 0 || to < 0 || to >= ids.length) return;
+    const next = [...ids];
+    next.splice(from, 1);
+    next.splice(to, 0, presetId);
+    await commitPresetOrder(next);
+  };
+
   const locale = settings?.locale ?? 'en';
   const text = translations[locale];
   useEffect(() => {
@@ -395,7 +449,6 @@ export function App({
     { section: 'review', key: 'navReview' },
     { section: 'presets', key: 'navPresets' },
     { section: 'locked', key: 'navLocked' },
-    { section: 'history', key: 'navHistory' },
     { section: 'settings', key: 'navSettings' },
   ];
   const statusKey: TranslationKey = settings.apiKeyStatus === 'valid' ? 'statusValid'
@@ -443,6 +496,11 @@ export function App({
             {text.appliedChanges}: {applyResult.applied} · {text.skippedChanges}: {applyResult.skipped}
           </p>
         ) : null}
+        {/* A sort that asked for nothing to move is indistinguishable from a setting that never
+            took effect, which is how the silence was read. */}
+        {applyResult?.sortOutcome == null ? null : (
+          <p className="banner banner--warning" role="status">{text.sortIncomplete}</p>
+        )}
 
         {section !== 'settings' && organizationUnavailable ? (
           <section className="card">
@@ -839,8 +897,42 @@ export function App({
               </form>
             </section>
 
-            {(organization?.presets ?? []).length === 0 ? <p className="empty">{text.noPresets}</p> : organization?.presets.map((preset) => (
-              <article key={preset.id} className="row">
+            {(organization?.presets ?? []).length === 0
+              ? <p className="empty">{text.noPresets}</p>
+              : <p className="field__note">{text.presetOrderNote}</p>}
+            {organization?.presets.map((preset, index) => (
+              <article
+                key={preset.id}
+                className={`row row--preset${draggingPresetId === preset.id ? ' row--dragging' : ''}`}
+                onDragOver={(event) => {
+                  if (draggingPresetId === null || draggingPresetId === preset.id) return;
+                  // Preventing the default is what marks this row as a place a drop may land.
+                  event.preventDefault();
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  void movePresetTo(preset.id);
+                }}
+              >
+                {/* Drag for a pointer, arrow keys for everything else: a drop target cannot be
+                    reached from the keyboard, and reordering must not need a mouse. */}
+                <span
+                  className="row__grip"
+                  role="button"
+                  tabIndex={0}
+                  draggable
+                  aria-label={fillPlaceholders(text.presetReorder, { name: preset.name })}
+                  title={text.presetReorderHint}
+                  onDragStart={() => setDraggingPresetId(preset.id)}
+                  onDragEnd={() => setDraggingPresetId(null)}
+                  onKeyDown={(event) => {
+                    if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+                    event.preventDefault();
+                    void movePresetBy(preset.id, event.key === 'ArrowUp' ? -1 : 1);
+                  }}
+                >
+                  <GripIcon />
+                </span>
                 <span className={`swatch swatch--${preset.color}`} aria-hidden="true" />
                 <span className="row__main">
                   <span className="row__title">{preset.name}</span>
@@ -880,110 +972,73 @@ export function App({
 
         {section === 'locked' && !organizationUnavailable ? (
           <>
-            <section className="card">
-              <h1 className="card__title">{text.lockedTitle}</h1>
-              {(organization?.locks ?? []).length === 0 ? <p className="empty">{text.noLockedTabs}</p> : null}
+            {/* No heading: the navigation already says Locked, and repeating it only costs rows. */}
+            <section className="card" aria-label={text.lockedTitle}>
+              {(organization?.locks ?? []).length === 0
+                ? <p className="empty">{text.noLockedTabs}</p>
+                : (
+                  <div className="group__actions">
+                    <button
+                      type="button"
+                      className="btn btn--soft btn--sm"
+                      onClick={() => setSelectedLockIds(allLocksSelected
+                        ? []
+                        : (organization?.locks ?? []).map((lock) => lock.tabId))}
+                    >
+                      {allLocksSelected ? text.deselectAllLocked : text.selectAllLocked}
+                    </button>
+                  </div>
+                )}
             </section>
 
             {organization?.locks.map((lock) => (
-              <article key={lock.tabId} className="row">
-                <span className="swatch swatch--grey" aria-hidden="true" />
-                <span className="row__main">
-                  <span className="row__title">
-                    {tabSummaries.get(lock.tabId)?.title ?? `${text.tabLabel} ${lock.tabId}`}
+              <article key={lock.tabId} className="row row--select">
+                <label className="check-row">
+                  <input
+                    type="checkbox"
+                    checked={selectedLockIds.includes(lock.tabId)}
+                    disabled={isUnlocking}
+                    onChange={(event) => setSelectedLockIds(event.currentTarget.checked
+                      ? [...selectedLockIds, lock.tabId]
+                      : selectedLockIds.filter((tabId) => tabId !== lock.tabId))}
+                  />
+                  <span className="row__main">
+                    <span className="row__title">
+                      {tabSummaries.get(lock.tabId)?.title ?? `${text.tabLabel} ${lock.tabId}`}
+                    </span>
+                    {tabSummaries.get(lock.tabId)?.hostname === undefined ? null : (
+                      <span className="row__meta">{tabSummaries.get(lock.tabId)?.hostname}</span>
+                    )}
+                    <span className="row__meta">
+                      {lock.changed ? text.changedSinceLock : text.unchangedSinceLock}
+                    </span>
                   </span>
-                  {tabSummaries.get(lock.tabId)?.hostname === undefined ? null : (
-                    <span className="row__meta">{tabSummaries.get(lock.tabId)?.hostname}</span>
-                  )}
-                  <span className="row__meta">
-                    {lock.changed ? text.changedSinceLock : text.unchangedSinceLock}
-                  </span>
-                </span>
-                <span className="row__actions">
-                  <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    onClick={() => void run(async () => {
-                      if (organizationClient !== undefined) setOrganization(await organizationClient.unlockTab(lock.tabId));
-                    })}
-                  >
-                    {text.unlock}
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn--secondary btn--sm"
-                    onClick={() => void run(async () => {
-                      if (organizationClient !== undefined) setOrganization(await organizationClient.unlockAndAnalyze(lock.tabId));
-                    })}
-                  >
-                    {text.unlockAnalyze}
-                  </button>
-                </span>
+                </label>
               </article>
             ))}
-          </>
-        ) : null}
 
-        {section === 'history' && !organizationUnavailable ? (
-          <>
-            <section className="card">
-              <h1 className="card__title">{text.historyTitle}</h1>
-              {(organization?.history ?? []).length === 0
-                ? <p className="empty">{text.noHistory}</p>
-                : <p className="field__note">{text.undoLatestOnly}</p>}
-              {/* An undo can put back nothing at all, and the outcome used to be invisible. The
-                  skipped count carries its own explanation because the reasons live in tab state
-                  the user cannot see from here. */}
-              {undoResult === null ? null : (
-                <p className="banner banner--info" role="status">
-                  {text.undoRestored}: {undoResult.restored} · {text.undoSkipped}: {undoResult.skipped}
-                  {' '}
-                  <span
-                    className="hint"
-                    tabIndex={0}
-                    role="note"
-                    aria-label={text.undoSkippedHint}
-                    title={text.undoSkippedHint}
-                  >
-                    ?
-                  </span>
-                </p>
-              )}
-            </section>
-
-            {organization?.history.map((operation) => (
-              <article key={operation.id} className="row">
-                <span className="swatch swatch--grey" aria-hidden="true" />
-                <span className="row__main">
-                  <span className="row__title">
-                    {operation.kind === 'automatic' ? text.operationAutomatic : text.operationSync} · {operation.tabs.length}
-                  </span>
-                  <span className="row__meta">{new Date(operation.createdAt).toLocaleString(locale)}</span>
-                </span>
-                <span className="row__actions">
-                  <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    disabled={operation.id !== undoableId || undoingOperationId === operation.id}
-                    onClick={() => {
-                      if (organizationClient === undefined || undoingOperationId !== null) return;
-                      setUndoingOperationId(operation.id);
-                      void run(async () => {
-                        try {
-                          const outcome = await organizationClient.undo(operation.id);
-                          setOrganization(outcome.state);
-                          setUndoResult({ restored: outcome.restored, skipped: outcome.skipped });
-                        } finally {
-                          setUndoingOperationId(null);
-                        }
-                      });
-                    }}
-                  >
-                    {operation.undoneAt === null ? text.undo : text.undone}
-                  </button>
-                </span>
-              </article>
-            ))}
+            {/* Unlocking one tab at a time was the only way out of a long list. */}
+            {(organization?.locks ?? []).length > 0 ? (
+              <div className="sticky-cta">
+                <p className="field__note">{text.selectedCount}: {selectedLockIds.length}</p>
+                <button
+                  type="button"
+                  className="btn btn--primary btn--block"
+                  disabled={selectedLockIds.length === 0 || isUnlocking}
+                  onClick={() => void unlockSelected(false)}
+                >
+                  {text.unlock} ({selectedLockIds.length})
+                </button>
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--block"
+                  disabled={selectedLockIds.length === 0 || isUnlocking}
+                  onClick={() => void unlockSelected(true)}
+                >
+                  {text.unlockAnalyze} ({selectedLockIds.length})
+                </button>
+              </div>
+            ) : null}
           </>
         ) : null}
 
@@ -1214,6 +1269,20 @@ function LockIcon() {
         strokeLinecap="round"
       />
       <rect x="3" y="7" width="10" height="6.75" rx="1.75" fill="currentColor" />
+    </svg>
+  );
+}
+
+/** Two rows of dots: the conventional mark for something that can be dragged. */
+function GripIcon() {
+  return (
+    <svg width="10" height="16" viewBox="0 0 10 16" aria-hidden="true" focusable="false">
+      {[4, 8, 12].map((y) => (
+        <g key={y} fill="currentColor">
+          <circle cx="3" cy={y} r="1.2" />
+          <circle cx="7" cy={y} r="1.2" />
+        </g>
+      ))}
     </svg>
   );
 }
