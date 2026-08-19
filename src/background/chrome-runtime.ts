@@ -1,4 +1,4 @@
-import { ChromeActiveTabPlatform, ChromeFirstPagePlatform, ChromeSynchronizationPlatform, registerTabLifecycle } from './chrome-platform';
+import { ChromeActionBadge, ChromeActiveTabPlatform, ChromeFirstPagePlatform, ChromeSynchronizationPlatform, registerTabLifecycle } from './chrome-platform';
 import { FirstPageOrganizer } from './first-page-organizer';
 import {
   createClassifier,
@@ -11,6 +11,7 @@ import {
 import { createOrganizationMessageHandler } from './organization-messages';
 import { OrganizationService } from './organization-service';
 import { PresetStore } from './preset-store';
+import { withReviewBadge } from './review-badge';
 import type { LocalStorageArea, SettingsService } from './settings-service';
 import { SynchronizationService } from './synchronization-service';
 import { TabLockStore } from './tab-lock-store';
@@ -96,7 +97,7 @@ export function createChromeOrganizationHandler(settings: SettingsService) {
     () => chrome.i18n.getUILanguage(),
     (nextLocale) => { locale = nextLocale; },
   );
-  return createOrganizationMessageHandler(service);
+  return withReviewBadge(createOrganizationMessageHandler(service), new ChromeActionBadge());
 }
 
 function createStorageArea(area: chrome.storage.StorageArea): LocalStorageArea {

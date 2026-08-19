@@ -1,3 +1,4 @@
+import type { BadgePlatform } from './review-badge';
 import type { FirstPageOrganizer, OrganizableTab, TabGroupingPlatform } from './first-page-organizer';
 import type { ActiveTabPlatform } from './organization-service';
 import type { GroupColor, PresetStore } from './preset-store';
@@ -6,6 +7,17 @@ import type { OrderedTab, TabOrderPlatform } from './tab-order';
 import type { TabLockStore } from './tab-lock-store';
 import type { TabPlacementStore } from './tab-placement-store';
 import type { SettingsService } from './settings-service';
+
+/** The extension's own toolbar button, which is where the badge is drawn. */
+export class ChromeActionBadge implements BadgePlatform {
+  async setText(text: string): Promise<void> {
+    await chrome.action.setBadgeText({ text });
+  }
+
+  async setBackgroundColor(color: string): Promise<void> {
+    await chrome.action.setBadgeBackgroundColor({ color });
+  }
+}
 
 export class ChromeSynchronizationPlatform implements SynchronizationPlatform, TabOrderPlatform {
   async listWindowTabs(windowId: number): Promise<OrderedTab[]> {

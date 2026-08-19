@@ -58,8 +58,11 @@ class MemoryOrganizationClient implements OrganizationClient {
   pendingProposal: SynchronizationProposal | null = null;
   // Whether a run started before this popup opened is still going.
   reviewing = false;
+  // How many times a window reported that it is showing the review, which is what puts the badge out.
+  seenReports = 0;
   async getState() { return this.state; }
   async reviewStatus() { return { proposal: this.pendingProposal, reviewing: this.reviewing }; }
+  async markReviewSeen() { this.seenReports += 1; }
   async createPreset(draft: PresetDraft) {
     this.state = { ...this.state, presets: [...this.state.presets, { id: 'preset-1', ...draft }] };
     return this.state;
@@ -617,6 +620,19 @@ describe('App organization flows', () => {
     expect(await screen.findByText(/Work \(/)).toBeVisible();
     expect(screen.getByRole('button', { name: 'Apply selected (1)' })).toBeEnabled();
     expect(reviews).toBe(0);
+  });
+
+  it('reports a review it is showing, so the toolbar badge stops asking to be opened', async () => {
+    const user = userEvent.setup();
+    const organization = new MemoryOrganizationClient();
+    render(<App settingsClient={new ReadySettingsClient()} organizationClient={organization} permissionBridge={grantAll} />);
+
+    await user.click(await screen.findByRole('button', { name: 'Sync' }));
+    expect(organization.seenReports).toBe(0);
+    await user.click(screen.getByRole('button', { name: 'Sync tabs that need it' }));
+
+    expect(await screen.findByText(/Work \(/)).toBeVisible();
+    expect(organization.seenReports).toBeGreaterThan(0);
   });
 
   it('leaves the review empty when nothing is pending', async () => {

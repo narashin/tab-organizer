@@ -27,6 +27,8 @@ export interface OrganizationClient {
   retryFirstPage(tabId: number): Promise<OrganizationState>;
   review(scope: ReviewScope): Promise<SynchronizationProposal>;
   reviewStatus(): Promise<ReviewStatus>;
+  /** Reports that this window is showing a finished review, which puts the toolbar badge out. */
+  markReviewSeen(): Promise<void>;
   apply(proposalId: string, selectedTabIds: number[]): Promise<ApplyResult>;
 }
 
@@ -60,6 +62,10 @@ export class RuntimeOrganizationClient implements OrganizationClient {
     if (response.proposal === undefined) return { proposal: null, reviewing };
     if (!isSynchronizationProposal(response.proposal)) throw new Error('organization_request_failed');
     return { proposal: response.proposal, reviewing };
+  }
+
+  async markReviewSeen(): Promise<void> {
+    await this.request({ type: 'sync/seen' });
   }
 
   async apply(proposalId: string, selectedTabIds: number[]) {

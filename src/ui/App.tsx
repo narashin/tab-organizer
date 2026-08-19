@@ -177,6 +177,17 @@ export function App({
     return () => { active = false; clearInterval(timer); };
   }, [isReviewing, organizationClient]);
 
+  /**
+   * Puts out the toolbar badge once this window is showing the review it points at.
+   *
+   * A window opened after the run reports itself on load, when it asks for the pending proposal. A
+   * window that was already open when the run landed has nothing to ask for, so it says so here.
+   */
+  useEffect(() => {
+    if (organizationClient === undefined || proposal === null || section !== 'review') return;
+    void organizationClient.markReviewSeen().catch(() => undefined);
+  }, [organizationClient, proposal, section]);
+
   const locks = organization?.locks ?? [];
   const allLocksSelected = locks.length > 0 &&
     locks.every((lock) => selectedLockIds.includes(lock.tabId));

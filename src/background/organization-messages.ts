@@ -15,6 +15,7 @@ export type OrganizationRequest =
   | { type: 'automatic/retry'; tabId: number }
   | { type: 'sync/review'; scope: ReviewScope }
   | { type: 'sync/latest' }
+  | { type: 'sync/seen' }
   | { type: 'sync/apply'; proposalId: string; selectedTabIds: number[] };
 
 export interface OrganizationResponse {
@@ -72,6 +73,11 @@ export function createOrganizationMessageHandler(service: OrganizationService): 
           const reviewing = service.isReviewing();
           return proposal === null ? { ok: true, reviewing } : { ok: true, proposal, reviewing };
         }
+        case 'sync/seen':
+          // Nothing for the services to do: this says a window is showing the review, which only
+          // the toolbar badge cares about. It travels with the other organization messages so the
+          // interface keeps one channel to the worker rather than two.
+          return { ok: true };
         case 'sync/apply':
           return { ok: true, applyResult: await service.apply(message.proposalId, message.selectedTabIds) };
       }
@@ -88,6 +94,7 @@ function isOrganizationRequest(value: unknown): value is OrganizationRequest {
     case 'organization/get':
     case 'locks/lock-active':
     case 'sync/latest':
+    case 'sync/seen':
       return true;
     case 'presets/create':
       return isPresetDraft(value.draft);
