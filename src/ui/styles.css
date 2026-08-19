@@ -105,10 +105,12 @@ button:disabled {
 }
 
 /* Shell. Rows are sized by content; the body is the only scroll container, so switching
-   sections never resizes the header or the navigation. */
+   sections never resizes the header or the navigation. The row count is stated per shell because
+   the body has to land on the `1fr` track to scroll: give it one row too many and it sizes to its
+   content, and the overflow is clipped by the shell instead. */
 .app-shell {
   display: grid;
-  grid-template-rows: auto auto 1fr;
+  grid-template-rows: auto 1fr;
   height: 100%;
   overflow: hidden;
   background: var(--color-bg);
@@ -116,6 +118,7 @@ button:disabled {
 
 .app-shell--popup {
   position: relative;
+  grid-template-rows: auto auto 1fr;
   width: 400px;
   /* Chrome refuses to grow a popup vertically, so the height is whatever the content needs, capped
      where Chrome stops honoring it. Past that the body scrolls, as it did before.
@@ -154,9 +157,12 @@ button:disabled {
   color: var(--color-fg);
 }
 
+/* The panel has no header of its own, so the padding the header used to contribute is stated here:
+   without it the navigation sits flush against Chrome's own panel header. */
 .app-shell--panel {
   width: 100%;
   max-width: 520px;
+  padding-top: var(--space-4);
   margin: 0 auto;
 }
 

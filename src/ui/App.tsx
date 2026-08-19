@@ -496,15 +496,23 @@ export function App({
 
   return (
     <main className={`app-shell app-shell--${shell}`} style={shellStyle}>
-      <header className="app-header">
-        <div className="brand-mark" aria-hidden="true">T</div>
-        <span className="brand-name">{text.appName}</span>
-        {shell === 'popup' && openSidePanel !== undefined ? (
-          <button type="button" className="btn btn--ghost btn--sm" onClick={() => void openSidePanel()}>
-            {text.openInPanel}
-          </button>
-        ) : null}
-      </header>
+      {/*
+        Chrome draws its own header above the side panel, carrying the extension icon and name. A
+        second copy inside the document would say the same thing twice and cost a row of the little
+        vertical space a panel has. The popup gets no such frame, so it keeps the header — which is
+        also where the button that trades the popup for the panel belongs.
+      */}
+      {shell === 'popup' ? (
+        <header className="app-header">
+          <div className="brand-mark" aria-hidden="true">T</div>
+          <span className="brand-name">{text.appName}</span>
+          {openSidePanel !== undefined ? (
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => void openSidePanel()}>
+              {text.openInPanel}
+            </button>
+          ) : null}
+        </header>
+      ) : null}
 
       <nav className="segmented" aria-label={text.appName}>
         {navigation.map((item) => (

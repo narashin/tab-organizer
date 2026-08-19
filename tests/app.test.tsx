@@ -161,6 +161,27 @@ describe('App', () => {
     expect(screen.queryByRole('button', { name: 'Open side panel' })).not.toBeInTheDocument();
   });
 
+  it('names the extension in the popup only, since Chrome already titles the panel', async () => {
+    const { unmount } = render(
+      <App shell="popup" settingsClient={new MemorySettingsClient()} permissionBridge={grantAll} />,
+    );
+
+    expect(await screen.findByRole('banner')).toHaveTextContent('Tab Organizer');
+    unmount();
+
+    render(<App shell="panel" settingsClient={new MemorySettingsClient()} permissionBridge={grantAll} />);
+
+    await screen.findByRole('heading', { name: 'Connect OpenAI' });
+    expect(screen.queryByRole('banner')).not.toBeInTheDocument();
+  });
+
+  it('gives each shell as many rows as it has children, so the body keeps the scrolling one', async () => {
+    const styles = await readFile(resolve(process.cwd(), 'src/ui/styles.css'), 'utf8');
+
+    expect(styles).toMatch(/(?:^|\n)\.app-shell\s*\{[^}]*grid-template-rows: auto 1fr;/s);
+    expect(styles).toMatch(/(?:^|\n)\.app-shell--popup\s*\{[^}]*grid-template-rows: auto auto 1fr;/s);
+  });
+
   it('switches provider, moves the model default with it, and names which keys exist', async () => {
     const user = userEvent.setup();
     const client = new MemorySettingsClient();
