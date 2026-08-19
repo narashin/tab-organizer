@@ -626,7 +626,7 @@ describe('App organization flows', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Sync' }));
 
-    expect(screen.getByText('Run a synchronization to review proposed changes.')).toBeVisible();
+    expect(screen.getByText('Run a sync to review proposed changes.')).toBeVisible();
   });
 
   it('labels pending organization data separately from settings loading', async () => {
