@@ -85,7 +85,9 @@ export class FirstPageOrganizer {
   ) {}
 
   async registerCreated(tab: OrganizableTab): Promise<void> {
-    await this.writeRecord(tab.tabId, { status: 'pending' });
+    await this.mutateRecords((records) => {
+      records[String(tab.tabId)] = { status: 'pending' };
+    });
   }
 
   async handleStable(tab: OrganizableTab): Promise<FirstPageOutcome> {
@@ -140,8 +142,19 @@ export class FirstPageOrganizer {
   }
 
   async remove(tabId: number): Promise<void> {
+    await this.removeAll([tabId]);
+  }
+
+  /**
+   * Drops several records at once.
+   *
+   * One pass rather than one per tab: a window that was closed with a dozen unclassified tabs would
+   * otherwise read and rewrite the whole record set a dozen times, each write racing the next.
+   */
+  async removeAll(tabIds: readonly number[]): Promise<void> {
+    if (tabIds.length === 0) return;
     await this.mutateRecords((records) => {
-      delete records[String(tabId)];
+      for (const tabId of tabIds) delete records[String(tabId)];
     });
   }
 
@@ -374,8 +387,18 @@ export class FirstPageOrganizer {
     return parseRecords(values[STATE_KEY]);
   }
 
+  /**
+   * Records an outcome for a tab that is still being tracked, and does nothing for one that is not.
+   *
+   * A classification request outlives the tab that prompted it. Closing a tab mid-run removes its
+   * record, and the answer — or the failure of the whole batch — arrived afterwards and wrote it back
+   * in. That resurrected row named a tab that no longer existed, so it showed a bare ID and a retry
+   * that could never succeed. Only `registerCreated` introduces a record; everything after it is an
+   * update to one that must already be there.
+   */
   private async writeRecord(tabId: number, record: FirstPageRecord): Promise<void> {
     await this.mutateRecords((records) => {
+      if (records[String(tabId)] === undefined) return;
       records[String(tabId)] = record;
     });
   }

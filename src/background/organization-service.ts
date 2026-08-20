@@ -31,12 +31,12 @@ export class OrganizationService {
   ) {}
 
   async getState(): Promise<OrganizationState> {
-    const [presets, locks, failedTabIds] = await Promise.all([
+    const [presets, locks, recordedFailures] = await Promise.all([
       this.presets.list(),
       this.locks.list(),
       this.firstPage.listFailedTabIds(),
     ]);
-    const tabIds = [...new Set([...locks.map((lock) => lock.tabId), ...failedTabIds])];
+    const tabIds = [...new Set([...locks.map((lock) => lock.tabId), ...recordedFailures])];
     const summaries = await Promise.all(tabIds.map(async (tabId) => {
       const tab = await this.tabs.getOrganizableTab(tabId);
       return tab === null ? null : {
@@ -45,10 +45,17 @@ export class OrganizationService {
         hostname: getHostname(tab.url),
       };
     }));
+    const present = new Set(summaries.filter(isDefined).map((summary) => summary.tabId));
+    // A failure whose tab is gone is not a failure anyone can act on: there is nothing left to
+    // classify, and Chrome never reuses the ID, so the row would sit there for good showing a bare
+    // number and a retry that can only fail. The lookup that builds the summaries already answers
+    // whether the tab exists, so clearing these costs no extra call.
+    const closed = recordedFailures.filter((tabId) => !present.has(tabId));
+    if (closed.length > 0) await this.firstPage.removeAll(closed);
     return {
       presets,
       locks,
-      failedTabIds,
+      failedTabIds: recordedFailures.filter((tabId) => present.has(tabId)),
       tabSummaries: summaries.filter(isDefined),
     };
   }
@@ -102,9 +109,18 @@ export class OrganizationService {
     return this.getState();
   }
 
+  /**
+   * Tries the automatic classification again, or forgets the tab if it is no longer there.
+   *
+   * A missing tab used to be reported as a failed operation, which put an error in front of the user
+   * for a tab they had closed themselves and left the row in place to be clicked again.
+   */
   async retryFirstPage(tabId: number): Promise<OrganizationState> {
     const tab = await this.tabs.getOrganizableTab(tabId);
-    if (tab === null) throw new Error('tab_missing');
+    if (tab === null) {
+      await this.firstPage.removeAll([tabId]);
+      return this.getState();
+    }
     await this.firstPage.retry(tab);
     return this.getState();
   }

@@ -811,6 +811,57 @@ describe('FirstPageOrganizer', () => {
   });
 });
 
+describe('FirstPageOrganizer records for tabs that close mid-run', () => {
+  it('does not write an outcome back for a tab whose record was removed while the request was in flight', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const presets = new PresetStore(local, () => 'preset-1');
+    const locks = new TabLockStore(session, () => 100);
+    let organizer: FirstPageOrganizer | undefined;
+    // The tab is closed after the request leaves and before the answer comes back, which is what the
+    // lifecycle listener does when Chrome reports the removal mid-classification.
+    const classifier: Classifier = {
+      classify: async () => {
+        await organizer?.remove(eligibleTab.tabId);
+        throw new Error('gateway_unreachable');
+      },
+    };
+    organizer = new FirstPageOrganizer(
+      session,
+      async () => classifier,
+      presets,
+      locks,
+      new RecordingPlatform(),
+      () => 'en',
+    );
+
+    await organizer.registerCreated(eligibleTab);
+    await organizer.handleStable(eligibleTab);
+
+    await expect(organizer.listFailedTabIds()).resolves.toEqual([]);
+  });
+
+  it('drops several records in one pass', async () => {
+    const local = new MemoryStorage();
+    const session = new MemoryStorage();
+    const organizer = new FirstPageOrganizer(
+      session,
+      async () => ({ classify: async () => [] }),
+      new PresetStore(local, () => 'preset-1'),
+      new TabLockStore(session, () => 100),
+      new RecordingPlatform(),
+      () => 'en',
+    );
+    await organizer.registerCreated({ ...eligibleTab, tabId: 1 });
+    await organizer.registerCreated({ ...eligibleTab, tabId: 2 });
+    await organizer.registerCreated({ ...eligibleTab, tabId: 3 });
+
+    await organizer.removeAll([1, 3]);
+
+    expect(session.values.firstPageStates).toEqual({ 2: { status: 'pending' } });
+  });
+});
+
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
